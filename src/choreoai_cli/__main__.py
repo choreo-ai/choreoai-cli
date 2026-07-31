@@ -46,7 +46,7 @@ def main(argv: list[str] | None = None) -> int:
 
     from rich.console import Console
 
-    from choreo_cli.repl import build_live_harness, print_result, run_repl
+    from choreoai_cli.repl import build_live_harness, print_result, run_repl
 
     console = Console()
     cwd = args.cwd.resolve() if args.cwd else Path.cwd()

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from choreo_cli.tools import (
+from choreoai_cli.tools import (
     PathJailError,
     ShellApprovalPolicy,
     _resolve_under_root,

@@ -40,10 +40,10 @@ Repository = "https://github.com/choreo-ai/choreoai-cli"
 Issues = "https://github.com/choreo-ai/choreoai-cli/issues"
 
 [project.scripts]
-choreoai-cli = "choreo_cli.__main__:main"
+choreoai-cli = "choreoai_cli.__main__:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/choreo_cli"]
+packages = ["src/choreoai_cli"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

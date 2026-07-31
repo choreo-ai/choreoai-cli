@@ -12,8 +12,8 @@ from choreoai.core import BudgetMiddleware, OnionMiddlewareStack
 from choreoai.core.events import Event, Subscriber
 from choreoai.reliability import BudgetDimensions, BudgetExhausted, InMemoryBudget
 
-from choreo_cli.harness import CodingHarness
-from choreo_cli.repl import LiveEventSubscriber
+from choreoai_cli.harness import CodingHarness
+from choreoai_cli.repl import LiveEventSubscriber
 from fakes import FakeChatModel
 
 

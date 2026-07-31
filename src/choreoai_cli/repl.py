@@ -22,7 +22,7 @@ from rich.text import Text
 
 from choreoai.core.events import Event, Subscriber
 
-from choreo_cli.harness import CodingHarness, RunResult
+from choreoai_cli.harness import CodingHarness, RunResult
 
 HELP_TEXT = """\
 Commands:

@@ -12,8 +12,8 @@ from rich.console import Console
 
 from choreoai.core.events import LLMCalled, RunFinished, RunStarted, ToolCalled
 
-from choreo_cli.harness import CodingHarness
-from choreo_cli.repl import (
+from choreoai_cli.harness import CodingHarness
+from choreoai_cli.repl import (
     LiveEventSubscriber,
     _looks_like_code,
     _render_answer_body,

@@ -84,7 +84,7 @@ jobs:
               raise SystemExit("failed to update version in pyproject.toml")
           pyproject.write_text(text, encoding="utf-8")
 
-          init = Path("src/choreo_cli/__init__.py")
+          init = Path("src/choreoai_cli/__init__.py")
           init_text = init.read_text(encoding="utf-8")
           init_text, n = re.subn(
               r'^__version__\s*=\s*"[^"]+"',
@@ -94,7 +94,7 @@ jobs:
               flags=re.M,
           )
           if n != 1:
-              raise SystemExit("failed to update __version__ in src/choreo_cli/__init__.py")
+              raise SystemExit("failed to update __version__ in src/choreoai_cli/__init__.py")
           init.write_text(init_text, encoding="utf-8")
 
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:

@@ -21,7 +21,7 @@ from choreoai.core import (
 )
 from choreoai.reliability import BudgetDimensions, InMemoryBudget
 
-from choreo_cli.tools import ShellApprovalPolicy, default_tools
+from choreoai_cli.tools import ShellApprovalPolicy, default_tools
 
 CODING_SYSTEM_PROMPT = """\
 You are a careful coding assistant working in a local project directory.
