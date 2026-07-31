@@ -1,49 +1,187 @@
 """Interactive REPL for the coding-agent harness.
 
-Uses **rich** for Claude-Code-style streamed rendering (panels, markdown,
-syntax, spinners) and **prompt_toolkit** for a polished input line (history,
-multiline). Full-screen Textual TUIs are intentionally avoided so agent output
-can stream line-by-line into a normal terminal scrollback.
+Inline Claude-Code / Grok-style terminal UI: **rich** for streamed rendering
+(markdown, syntax, tool cards, status) and **prompt_toolkit** for a framed
+multiline input with history, slash completion, and a live bottom toolbar.
+
+Full-screen / alt-screen TUIs are intentionally avoided so agent output can
+stream into normal terminal scrollback.
 """
 
 from __future__ import annotations
 
 import os
 import sys
+import time
+from collections import deque
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Deque
 
 from rich.console import Console, Group
 from rich.markdown import Markdown
 from rich.panel import Panel
+from rich.rule import Rule
 from rich.status import Status
 from rich.syntax import Syntax
+from rich.table import Table
 from rich.text import Text
 
 from choreoai.core.events import Event, Subscriber
 
 from choreoai_cli.harness import CodingHarness, RunResult
 
-HELP_TEXT = """\
-Commands:
-  /help   Show this help
-  /reset  Clear session budget ledger, shell approvals, and trace
-  /exit   Quit the REPL
+# ---------------------------------------------------------------------------
+# Brand palette (truecolor; Rich / terminal may degrade gracefully)
+# ---------------------------------------------------------------------------
 
-Anything else is sent to the coding agent as an instruction.
+TERRACOTTA = "#C06B4E"
+TERRACOTTA_DEEP = "#A8583D"
+SAND = "#F1EBE0"
+TAUPE = "#B0A89C"
 
-Input:
-  Enter           submit (single-line mode)
-  Esc then Enter  submit (when multiline is enabled)
-  Ctrl+C / Ctrl+D quit
-  Up/Down         history (prompt_toolkit)
+# Rough Claude Sonnet-class list prices for a soft cost estimate (USD / 1M toks).
+_EST_INPUT_PER_M = 3.0
+_EST_OUTPUT_PER_M = 15.0
 
-Shell approval (when not --auto):
-  y / yes           allow this command once
-  n / no            deny this command once
-  always / a        allow all shell commands for this session
-  deny <pattern>    reject commands containing <pattern> for this session
-"""
+SLASH_COMMANDS: list[tuple[str, str]] = [
+    ("/help", "Show available commands"),
+    ("/reset", "Clear session budget, shell approvals, and trace"),
+    ("/exit", "Quit the REPL"),
+]
+
+# Tool display icons (compact, monochrome-friendly)
+_TOOL_ICONS: dict[str, str] = {
+    "read_file": "◎",
+    "write_file": "✎",
+    "list_dir": "▦",
+    "run_shell": "›",
+}
+
+
+class ToolArgTracker:
+    """FIFO of recent tool arg/result summaries for live UI cards.
+
+    Tools are sequential in the agent loop, so a simple queue correlates
+    instrumented invocations with subsequent ``tool_called`` events.
+    """
+
+    def __init__(self) -> None:
+        self._pending: Deque[tuple[str, str]] = deque()
+        self._results: Deque[tuple[str, str]] = deque()
+
+    def push_args(self, tool_name: str, summary: str) -> None:
+        self._pending.append((tool_name, summary))
+
+    def push_result(self, tool_name: str, preview: str) -> None:
+        self._results.append((tool_name, preview))
+
+    def pop_args(self, tool_name: str) -> str | None:
+        if self._pending and self._pending[0][0] == tool_name:
+            return self._pending.popleft()[1]
+        for i, (name, summary) in enumerate(self._pending):
+            if name == tool_name:
+                del self._pending[i]
+                return summary
+        return None
+
+    def pop_result(self, tool_name: str) -> str | None:
+        if self._results and self._results[0][0] == tool_name:
+            return self._results.popleft()[1]
+        for i, (name, preview) in enumerate(self._results):
+            if name == tool_name:
+                del self._results[i]
+                return preview
+        return None
+
+    def clear(self) -> None:
+        self._pending.clear()
+        self._results.clear()
+
+
+def summarize_tool_args(tool_name: str, kwargs: dict[str, Any]) -> str:
+    """Pick the signature argument for a compact tool-card line."""
+    if tool_name == "read_file":
+        return str(kwargs.get("path", "") or "")
+    if tool_name == "write_file":
+        path = str(kwargs.get("path", "") or "")
+        content = kwargs.get("content", "")
+        n = len(content) if isinstance(content, str) else 0
+        return f"{path}  ({n} chars)" if path else ""
+    if tool_name == "list_dir":
+        return str(kwargs.get("path", ".") or ".")
+    if tool_name == "run_shell":
+        cmd = str(kwargs.get("command", "") or "")
+        return (cmd[:72] + "…") if len(cmd) > 72 else cmd
+    # Generic fallback: first short string value
+    for key in ("path", "command", "query", "file", "name"):
+        if key in kwargs and kwargs[key] is not None:
+            s = str(kwargs[key])
+            return (s[:72] + "…") if len(s) > 72 else s
+    if not kwargs:
+        return ""
+    bits = []
+    for k, v in list(kwargs.items())[:3]:
+        sv = str(v)
+        if len(sv) > 40:
+            sv = sv[:40] + "…"
+        bits.append(f"{k}={sv}")
+    return " ".join(bits)
+
+
+def preview_tool_result(result: Any, *, limit: int = 80) -> str:
+    """One-line preview of a tool return value."""
+    text = str(result).replace("\r\n", "\n").replace("\r", "\n")
+    first = text.split("\n", 1)[0].strip()
+    if not first:
+        lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
+        first = lines[0] if lines else ""
+    if len(first) > limit:
+        return first[: limit - 1] + "…"
+    return first
+
+
+def instrument_tools_for_ui(
+    tools: list[Any],
+    tracker: ToolArgTracker,
+) -> list[Any]:
+    """Wrap StructuredTools so arg/result summaries feed the live UI."""
+    from langchain_core.tools import StructuredTool
+
+    wrapped: list[Any] = []
+    for tool in tools:
+        if not isinstance(tool, StructuredTool) or tool.func is None:
+            wrapped.append(tool)
+            continue
+
+        orig = tool.func
+        name = tool.name
+
+        def _make(orig_fn: Callable[..., Any], tname: str) -> Callable[..., Any]:
+            def _fn(*args: Any, **kwargs: Any) -> Any:
+                # StructuredTool usually passes kwargs; tolerate positional.
+                if args and not kwargs:
+                    # Best-effort: single-arg tools
+                    pass
+                tracker.push_args(tname, summarize_tool_args(tname, kwargs))
+                try:
+                    result = orig_fn(*args, **kwargs)
+                except Exception as exc:
+                    tracker.push_result(tname, preview_tool_result(f"error: {exc}"))
+                    raise
+                tracker.push_result(tname, preview_tool_result(result))
+                return result
+
+            return _fn
+
+        wrapped.append(
+            StructuredTool.from_function(
+                func=_make(orig, name),
+                name=name,
+                description=tool.description or name,
+                args_schema=tool.args_schema,
+            )
+        )
+    return wrapped
 
 
 def _history_path() -> Path:
@@ -56,11 +194,192 @@ def _history_path() -> Path:
     return root / "history"
 
 
+def _model_label(harness: CodingHarness) -> str:
+    model = getattr(harness.agent, "model", None)
+    if model is None:
+        return "—"
+    for attr in ("model", "model_name", "model_id"):
+        val = getattr(model, attr, None)
+        if isinstance(val, str) and val:
+            return val
+    return type(model).__name__
+
+
+def _short_cwd(cwd: Path, *, max_len: int = 48) -> str:
+    try:
+        home = Path.home()
+        resolved = cwd.resolve()
+        if resolved == home:
+            return "~"
+        try:
+            rel = resolved.relative_to(home)
+            s = "~/" + rel.as_posix()
+        except ValueError:
+            s = str(resolved)
+    except OSError:
+        s = str(cwd)
+    if len(s) > max_len:
+        return "…" + s[-(max_len - 1) :]
+    return s
+
+
+def _budget_short(harness: CodingHarness) -> str:
+    try:
+        snap = harness.budget.snapshot(context=harness.session_context)
+        parts: list[str] = []
+        for dim, cap in snap.caps.items():
+            used = snap.consumed.get(dim, 0.0)
+            parts.append(f"{dim} {used:g}/{cap:g}")
+        return " · ".join(parts) if parts else "budget n/a"
+    except Exception:
+        return harness.budget_summary()
+
+
+def _estimate_cost_usd(input_tokens: int, output_tokens: int) -> float:
+    return (
+        input_tokens / 1_000_000.0 * _EST_INPUT_PER_M
+        + output_tokens / 1_000_000.0 * _EST_OUTPUT_PER_M
+    )
+
+
+def _format_cost(usd: float) -> str:
+    if usd <= 0:
+        return "$0.00"
+    if usd < 0.01:
+        return f"${usd:.4f}"
+    return f"${usd:.3f}"
+
+
+def print_banner(console: Console, harness: CodingHarness) -> None:
+    """Compact startup header: wordmark, version, cwd, model, hints."""
+    from choreoai_cli import __version__
+
+    title = Text()
+    title.append("●", style=f"bold {TERRACOTTA}")
+    title.append(" ")
+    title.append("ChoreoAI", style=f"bold {SAND}")
+    title.append("  ", style="")
+    title.append(f"v{__version__}", style=f"dim {TAUPE}")
+
+    meta = Text()
+    meta.append("cwd", style=f"dim {TAUPE}")
+    meta.append("  ", style="")
+    meta.append(str(harness.cwd), style=SAND)
+    meta.append("\n", style="")
+    meta.append("model", style=f"dim {TAUPE}")
+    meta.append("  ", style="")
+    meta.append(_model_label(harness), style=SAND)
+
+    hint = Text(
+        "/help for commands · Ctrl+C to quit",
+        style=f"dim {TAUPE}",
+    )
+
+    body = Group(title, Text(""), meta, Text(""), hint)
+    console.print(
+        Panel(
+            body,
+            border_style=TERRACOTTA,
+            padding=(0, 1),
+            expand=True,
+        )
+    )
+
+
+def print_api_key_note(console: Console) -> None:
+    """Friendly note when the Anthropic key is missing (shell still starts)."""
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        return
+    note = Text()
+    note.append("Note  ", style=f"bold {TERRACOTTA}")
+    note.append(
+        "ANTHROPIC_API_KEY is not set. Live model calls will fail; "
+        "you can still explore /help and the shell. "
+        "Offline tests inject a fake model.",
+        style=TAUPE,
+    )
+    console.print(
+        Panel(note, border_style=TAUPE, padding=(0, 1), expand=True)
+    )
+
+
+def print_help(console: Console) -> None:
+    """Render slash-command help as a clean table."""
+    table = Table(
+        show_header=True,
+        header_style=f"bold {TERRACOTTA}",
+        border_style=TAUPE,
+        box=None,
+        padding=(0, 2),
+        expand=False,
+    )
+    table.add_column("Command", style=f"bold {SAND}")
+    table.add_column("Description", style=TAUPE)
+    for cmd, desc in SLASH_COMMANDS:
+        table.add_row(cmd, desc)
+
+    console.print()
+    console.print(Text("Commands", style=f"bold {SAND}"))
+    console.print(table)
+    console.print()
+    tips = Text()
+    tips.append("Input", style=f"bold {SAND}")
+    tips.append("\n  ", style="")
+    tips.append("Enter", style=SAND)
+    tips.append("  send     ", style=TAUPE)
+    tips.append("Esc+Enter", style=SAND)
+    tips.append(" / ", style=TAUPE)
+    tips.append("Shift+Enter", style=SAND)
+    tips.append("  newline\n", style=TAUPE)
+    tips.append("  Up/Down", style=SAND)
+    tips.append("  history     ", style=TAUPE)
+    tips.append("Ctrl+C", style=SAND)
+    tips.append("  quit\n", style=TAUPE)
+    tips.append("\nShell approval", style=f"bold {SAND}")
+    tips.append(" (when not --auto)\n", style=TAUPE)
+    tips.append(
+        "  y / yes · n / no · always / a · deny <pattern>\n",
+        style=TAUPE,
+    )
+    tips.append(
+        "\nAnything else is sent to the coding agent as an instruction.",
+        style=TAUPE,
+    )
+    console.print(tips)
+    console.print()
+
+
+# Back-compat: tests and older docs may reference HELP_TEXT.
+HELP_TEXT = """\
+Commands:
+  /help   Show this help
+  /reset  Clear session budget ledger, shell approvals, and trace
+  /exit   Quit the REPL
+
+Anything else is sent to the coding agent as an instruction.
+
+Input:
+  Enter           submit (single-line mode)
+  Esc then Enter  newline (multiline)
+  Ctrl+C / Ctrl+D quit
+  Up/Down         history (prompt_toolkit)
+
+Shell approval (when not --auto):
+  y / yes           allow this command once
+  n / no            deny this command once
+  always / a        allow all shell commands for this session
+  deny <pattern>    reject commands containing <pattern> for this session
+"""
+
+
 def make_prompt_fn(
     *,
     history_file: Path | None = None,
     multiline: bool = True,
     force_plain: bool = False,
+    toolbar_fn: Callable[[], Any] | None = None,
+    model_name: str = "",
+    cwd: Path | None = None,
 ) -> Callable[[str], str]:
     """Build an input callable: prompt_toolkit when interactive, else ``input``.
 
@@ -73,7 +392,10 @@ def make_prompt_fn(
     try:
         from prompt_toolkit import PromptSession
         from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
+        from prompt_toolkit.completion import Completer, Completion
+        from prompt_toolkit.formatted_text import HTML, to_formatted_text
         from prompt_toolkit.history import FileHistory, InMemoryHistory
+        from prompt_toolkit.key_binding import KeyBindings
         from prompt_toolkit.styles import Style
     except ImportError:
         return input
@@ -88,29 +410,107 @@ def make_prompt_fn(
     else:
         history = InMemoryHistory()
 
+    class SlashCompleter(Completer):
+        def get_completions(self, document, complete_event):  # type: ignore[no-untyped-def]
+            text = document.text_before_cursor.lstrip()
+            # Only complete when the buffer looks like a slash command line.
+            if not text.startswith("/"):
+                return
+            # Don't complete mid-sentence after the first token.
+            if " " in text.strip():
+                return
+            for cmd, desc in SLASH_COMMANDS:
+                if cmd.startswith(text):
+                    yield Completion(
+                        cmd,
+                        start_position=-len(text),
+                        display=cmd,
+                        display_meta=desc,
+                    )
+
     style = Style.from_dict(
         {
-            "prompt": "ansicyan bold",
-            "continuation": "ansibrightblack",
+            "prompt": f"{TERRACOTTA} bold",
+            "continuation": TAUPE,
+            "placeholder": TAUPE,
+            "bottom-toolbar": f"bg:#1C1917 {TAUPE}",
+            "bottom-toolbar.accent": f"bg:#1C1917 {TERRACOTTA}",
+            "bottom-toolbar.sand": f"bg:#1C1917 {SAND}",
+            "completion-menu": f"bg:#1C1917 {SAND}",
+            "completion-menu.completion": f"bg:#1C1917 {SAND}",
+            "completion-menu.completion.current": f"bg:{TERRACOTTA_DEEP} #ffffff",
+            "completion-menu.meta.completion": f"bg:#1C1917 {TAUPE}",
+            "completion-menu.meta.completion.current": f"bg:{TERRACOTTA_DEEP} #ffffff",
         }
     )
+
+    # Enter submits; Esc+Enter / Ctrl+J insert a newline (Claude-Code style).
+    kb = KeyBindings()
+
+    @kb.add("enter")
+    def _submit(event: Any) -> None:
+        event.current_buffer.validate_and_handle()
+
+    @kb.add("escape", "enter")
+    def _newline_esc(event: Any) -> None:
+        event.current_buffer.insert_text("\n")
+
+    @kb.add("c-j")
+    def _newline_cj(event: Any) -> None:
+        event.current_buffer.insert_text("\n")
+
+    # Shift+Enter where the terminal reports it (often as escape sequence).
+    try:
+
+        @kb.add("s-enter")
+        def _newline_shift(event: Any) -> None:
+            event.current_buffer.insert_text("\n")
+    except Exception:
+        pass
+
+    def _default_toolbar() -> Any:
+        model = model_name or "model"
+        path = _short_cwd(cwd) if cwd is not None else "."
+        return to_formatted_text(
+            HTML(
+                f"<b><style fg=\"{TERRACOTTA}\">{model}</style></b>"
+                f" <style fg=\"{TAUPE}\">·</style> "
+                f"<style fg=\"{SAND}\">{path}</style>"
+                f" <style fg=\"{TAUPE}\">·</style> "
+                f"<style fg=\"{TAUPE}\">↵ send · Esc↵ newline · /help · Ctrl+C quit</style>"
+            )
+        )
+
+    toolbar = toolbar_fn if toolbar_fn is not None else _default_toolbar
+
     session: PromptSession[str] = PromptSession(
         history=history,
         auto_suggest=AutoSuggestFromHistory(),
         enable_history_search=True,
         multiline=multiline,
-        prompt_continuation=lambda width, line_number, is_soft_wrap: "... ",
+        prompt_continuation=lambda width, line_number, is_soft_wrap: "  ",
         style=style,
+        completer=SlashCompleter(),
+        complete_while_typing=True,
+        key_bindings=kb,
+        bottom_toolbar=toolbar,
+        placeholder=HTML(
+            f'<style fg="{TAUPE}">Message the agent…  (/ for commands)</style>'
+        ),
     )
 
     def _prompt(message: str = "") -> str:
-        return session.prompt([("class:prompt", message)])
+        # Ignore the legacy prompt string; we always use the branded glyph.
+        glyph = message if message and message not in ("choreoai> ", "› ", "❯ ") else ""
+        if glyph:
+            return session.prompt([("class:prompt", glyph)])
+        return session.prompt([("class:prompt", "❯ ")])
 
     return _prompt
 
 
 class LiveEventSubscriber(Subscriber):
-    """Stream tool-call (and related) events to the console as they arrive.
+    """Stream tool-call (and related) events as compact Claude-Code-style cards.
 
     Optionally drives a rich ``Status`` spinner so the user sees activity while
     the model is thinking between events.
@@ -124,74 +524,131 @@ class LiveEventSubscriber(Subscriber):
         *,
         name: str = "live_repl",
         status: Status | None = None,
+        arg_tracker: ToolArgTracker | None = None,
     ) -> None:
         self.name = name
         self.console = console
         self._status = status
+        self._arg_tracker = arg_tracker
         self.tool_count = 0
         self.llm_count = 0
         self.total_input_tokens = 0
         self.total_output_tokens = 0
+        self.steps = 0
 
     def bind_status(self, status: Status | None) -> None:
         """Attach or detach a Status spinner used during a single turn."""
         self._status = status
+
+    def bind_arg_tracker(self, tracker: ToolArgTracker | None) -> None:
+        self._arg_tracker = tracker
 
     def reset_turn_stats(self) -> None:
         self.tool_count = 0
         self.llm_count = 0
         self.total_input_tokens = 0
         self.total_output_tokens = 0
+        self.steps = 0
+        if self._arg_tracker is not None:
+            self._arg_tracker.clear()
 
     def _pause_status(self) -> None:
         if self._status is not None:
             self._status.stop()
 
-    def _resume_status(self, message: str = "thinking…") -> None:
+    def _resume_status(self, message: str = "orchestrating…") -> None:
         if self._status is not None:
-            self._status.update(f"[bold cyan]{message}[/bold cyan]")
+            self._status.update(f"[{TERRACOTTA}]{message}[/{TERRACOTTA}]")
             self._status.start()
+
+    def _tool_icon(self, tool_name: str) -> str:
+        return _TOOL_ICONS.get(tool_name, "●")
+
+    def _render_tool_card(
+        self,
+        *,
+        tool_name: str,
+        ok: bool,
+        ms: float | int | None,
+        arg_summary: str | None,
+        result_preview: str | None,
+        err: str | None,
+    ) -> None:
+        """Print one aligned tool line into scrollback (no Live wipe)."""
+        ms_s = f"{ms:.0f}ms" if isinstance(ms, (int, float)) else "—"
+        mark = "✔" if ok else "✗"
+        mark_style = "green" if ok else "red"
+        icon = self._tool_icon(tool_name)
+
+        line = Text()
+        line.append("  ")
+        line.append(icon, style=TERRACOTTA if ok else "red")
+        line.append(" ")
+        line.append(f"{tool_name:<12}", style="bold")
+        if arg_summary:
+            # Key argument, dim — the Claude-Code signature look
+            display_arg = arg_summary if len(arg_summary) <= 56 else arg_summary[:55] + "…"
+            line.append(display_arg, style=f"dim {TAUPE}")
+
+        # Right-side status: pad lightly then mark + time
+        line.append("  ")
+        line.append(mark, style=mark_style)
+        line.append(" ")
+        line.append(ms_s, style=f"dim {TAUPE}")
+
+        self.console.print(line)
+
+        # Optional second line: short result / error preview
+        preview = err if (not ok and err) else result_preview
+        if preview:
+            prev = Text()
+            prev.append("     ", style="")
+            style = "red" if not ok else f"dim {TAUPE}"
+            text = preview if len(preview) <= 100 else preview[:99] + "…"
+            prev.append(text, style=style)
+            self.console.print(prev)
 
     async def on_event(self, event: Event) -> None:
         etype = getattr(event, "type", None)
 
         if etype == "tool_called":
             self.tool_count += 1
-            tool_name = getattr(event, "tool_name", "?")
-            ok = getattr(event, "success", False)
+            tool_name = getattr(event, "tool_name", "?") or "?"
+            ok = bool(getattr(event, "success", False))
             ms = getattr(event, "duration_ms", None)
-            ms_s = f"{ms:.0f}ms" if isinstance(ms, (int, float)) else "—"
             err = getattr(event, "error", None)
-            status_label = "ok" if ok else "fail"
-            style = "green" if ok else "red"
 
             meta = getattr(event, "metadata", None) or {}
-            detail_bits: list[str] = []
-            for key in ("args_summary", "input_summary", "result_summary", "output_summary"):
-                val = meta.get(key) if isinstance(meta, dict) else None
-                if val:
-                    detail_bits.append(str(val))
-            if err:
-                detail_bits.append(str(err))
+            arg_summary: str | None = None
+            result_preview: str | None = None
+            if isinstance(meta, dict):
+                for key in ("args_summary", "input_summary"):
+                    val = meta.get(key)
+                    if val:
+                        arg_summary = str(val)
+                        break
+                for key in ("result_summary", "output_summary"):
+                    val = meta.get(key)
+                    if val:
+                        result_preview = str(val)
+                        break
 
-            body = Text()
-            body.append(tool_name, style="bold")
-            body.append(f"  [{status_label}]", style=style)
-            body.append(f"  {ms_s}", style="dim")
-            if detail_bits:
-                body.append("\n")
-                body.append("  ".join(detail_bits)[:400], style="dim")
+            if self._arg_tracker is not None:
+                if not arg_summary:
+                    arg_summary = self._arg_tracker.pop_args(tool_name)
+                if not result_preview:
+                    result_preview = self._arg_tracker.pop_result(tool_name)
 
             self._pause_status()
-            self.console.print(
-                Panel(
-                    body,
-                    title=f"[bold]tool[/bold] #{self.tool_count}",
-                    border_style="cyan" if ok else "red",
-                    padding=(0, 1),
-                )
+            self._render_tool_card(
+                tool_name=tool_name,
+                ok=ok,
+                ms=ms,
+                arg_summary=arg_summary,
+                result_preview=result_preview,
+                err=str(err) if err else None,
             )
-            self._resume_status("thinking…")
+            self._resume_status("orchestrating…")
 
         elif etype == "llm_called":
             self.llm_count += 1
@@ -209,35 +666,43 @@ class LiveEventSubscriber(Subscriber):
             if not ok:
                 err = getattr(event, "error", None) or "llm error"
                 self._pause_status()
-                self.console.print(f"[yellow]llm[/yellow] fail — {err}")
-                self._resume_status("thinking…")
+                line = Text()
+                line.append("  ● ", style="yellow")
+                line.append("llm", style="yellow")
+                line.append(f"  fail — {err}", style=TAUPE)
+                self.console.print(line)
+                self._resume_status("orchestrating…")
             else:
-                # Quiet success line; full usage is in the turn footer.
-                bits = [f"[dim]llm[/dim] {model}"]
+                # Quiet success — usage lands in the turn footer.
+                bits = Text()
+                bits.append("  · ", style=f"dim {TAUPE}")
+                bits.append(str(model), style=f"dim {TAUPE}")
                 if ms_s:
-                    bits.append(f"[dim]{ms_s}[/dim]")
+                    bits.append(f"  {ms_s}", style=f"dim {TAUPE}")
                 tok_parts = []
                 if isinstance(in_tok, int):
                     tok_parts.append(f"in={in_tok}")
                 if isinstance(out_tok, int):
                     tok_parts.append(f"out={out_tok}")
                 if tok_parts:
-                    bits.append(f"[dim]{' '.join(tok_parts)}[/dim]")
+                    bits.append(f"  {' '.join(tok_parts)}", style=f"dim {TAUPE}")
                 self._pause_status()
-                self.console.print("  ".join(bits))
-                self._resume_status("thinking…")
+                self.console.print(bits)
+                self._resume_status("orchestrating…")
 
         elif etype == "run_started":
-            self._resume_status("run started…")
+            self._resume_status("orchestrating…")
 
         elif etype == "run_finished":
             status = getattr(event, "status", "?")
             self._pause_status()
-            self.console.print(f"[dim]run finished ({status})[/dim]")
+            if status and status not in ("ok",):
+                self.console.print(
+                    Text(f"  run finished ({status})", style=f"dim {TAUPE}")
+                )
 
         elif etype == "step_finished":
-            # Keep noise low; tool/llm events already cover the interesting bits.
-            pass
+            self.steps += 1
 
 
 def _looks_like_code(text: str) -> bool:
@@ -266,15 +731,19 @@ def _looks_like_code(text: str) -> bool:
     )
     first = lines[0].lstrip()
     return any(first.startswith(m) for m in code_markers) or (
-        sum(1 for ln in lines if ln.startswith((" ", "\t")) or ln.rstrip().endswith((";", "{", "}")))
+        sum(
+            1
+            for ln in lines
+            if ln.startswith((" ", "\t")) or ln.rstrip().endswith((";", "{", "}"))
+        )
         >= max(2, len(lines) // 2)
     )
 
 
 def _render_answer_body(text: str) -> Any:
-    """Choose Markdown vs Syntax highlighting for the final answer panel."""
+    """Choose Markdown vs Syntax highlighting for the final answer."""
     if not text.strip():
-        return Text("(no output)", style="dim")
+        return Text("(no output)", style=f"dim {TAUPE}")
     if _looks_like_code(text):
         lexer = "python"
         first = text.lstrip()
@@ -294,51 +763,59 @@ def print_result(
     result: RunResult,
     *,
     live: LiveEventSubscriber | None = None,
+    elapsed_s: float | None = None,
 ) -> None:
-    """Render the final answer panel plus budget/usage footer for one turn."""
+    """Render the assistant answer plus a dim turn footer (tokens / budget / time)."""
     text = result.output if result.output is not None else "(no output)"
     if not isinstance(text, str):
         text = str(text)
 
-    console.print(
-        Panel(
-            _render_answer_body(text),
-            title="[bold]Answer[/bold]",
-            border_style="cyan",
-            padding=(1, 2),
-        )
-    )
+    # Assistant marker + live Markdown body (no heavy panel wipe of scrollback).
+    header = Text()
+    header.append("●", style=f"bold {TERRACOTTA}")
+    header.append(" ", style="")
+    header.append("Answer", style=f"bold {SAND}")
+    console.print()
+    console.print(header)
+    console.print(_render_answer_body(text))
+    console.print()
 
     snap = result.budget_snapshot
     budget_parts: list[str] = []
     if snap is not None:
         for dim, cap in snap.caps.items():
             used = snap.consumed.get(dim, 0.0)
-            budget_parts.append(f"{dim} {used:g}/{cap:g}")
+            remaining = cap - used
+            budget_parts.append(f"{dim} {used:g}/{cap:g} (left {remaining:g})")
     else:
         budget_parts.append(harness.budget_summary())
 
+    in_tok = live.total_input_tokens if live is not None else 0
+    out_tok = live.total_output_tokens if live is not None else 0
+    tools_n = live.tool_count if live is not None else 0
+    llm_n = live.llm_count if live is not None else 0
+
     footer = Text()
-    footer.append("budget: ", style="dim")
-    footer.append(", ".join(budget_parts) if budget_parts else "n/a", style="dim")
+    footer.append("  ", style="")
+    parts: list[str] = []
+    if in_tok or out_tok:
+        parts.append(f"tokens {in_tok}↑ {out_tok}↓")
+        parts.append(f"est {_format_cost(_estimate_cost_usd(in_tok, out_tok))}")
+    if tools_n or llm_n:
+        parts.append(f"tools={tools_n} llm={llm_n}")
+    if budget_parts:
+        # Prefix so "budget" remains easy to grep in tests / logs.
+        parts.append("budget " + " · ".join(budget_parts))
+    if elapsed_s is not None:
+        if elapsed_s < 10:
+            parts.append(f"{elapsed_s:.1f}s")
+        else:
+            parts.append(f"{elapsed_s:.0f}s")
+    parts.append(f"trace: {harness.trace_summary()}")
 
-    if live is not None:
-        if live.tool_count or live.llm_count:
-            footer.append("  |  ", style="dim")
-            footer.append(
-                f"tools={live.tool_count} llm={live.llm_count}",
-                style="dim",
-            )
-        if live.total_input_tokens or live.total_output_tokens:
-            footer.append("  |  ", style="dim")
-            footer.append(
-                f"tokens in={live.total_input_tokens} out={live.total_output_tokens}",
-                style="dim",
-            )
-
-    footer.append("  |  ", style="dim")
-    footer.append(f"trace: {harness.trace_summary()}", style="dim")
+    footer.append(" · ".join(parts), style=f"dim {TAUPE}")
     console.print(footer)
+    console.print(Rule(style=f"dim {TAUPE}"))
 
 
 # Back-compat alias used by __main__ and older tests.
@@ -368,13 +845,26 @@ def run_repl(
         Show a rich Status spinner while the agent runs (disabled in tests /
         non-TTY).
     multiline:
-        Enable prompt_toolkit multiline input (Esc+Enter to submit).
+        Enable prompt_toolkit multiline buffer (Enter sends; Esc+Enter newline).
     history_file:
         Path for history, ``None`` for default ``~/.choreoai-cli/history``,
         or ``False`` for in-memory only.
     """
     console = console or Console()
     cwd = harness.cwd
+
+    # Instrument tools once so tool cards can show key args + result previews.
+    arg_tracker = getattr(harness, "tool_arg_tracker", None)
+    if arg_tracker is None:
+        arg_tracker = ToolArgTracker()
+        harness.tool_arg_tracker = arg_tracker  # type: ignore[attr-defined]
+        try:
+            tools = list(harness.agent.tools)
+            instrumented = instrument_tools_for_ui(tools, arg_tracker)
+            harness.agent.tools = instrumented
+            harness.agent._tool_map = {t.name: t for t in instrumented}  # noqa: SLF001
+        except Exception:
+            pass
 
     if input_fn is None:
         if history_file is False:
@@ -383,41 +873,50 @@ def run_repl(
             hist = _history_path()
         else:
             hist = history_file
-        # When console is quiet / not a real TTY, force plain input.
         force_plain = not console.is_terminal
+
+        def _toolbar() -> Any:
+            try:
+                from prompt_toolkit.formatted_text import HTML, to_formatted_text
+            except ImportError:
+                return ""
+            model = _model_label(harness)
+            path = _short_cwd(cwd)
+            budget = _budget_short(harness)
+            return to_formatted_text(
+                HTML(
+                    f"<b><style fg=\"{TERRACOTTA}\">{model}</style></b>"
+                    f" <style fg=\"{TAUPE}\">·</style> "
+                    f"<style fg=\"{SAND}\">{path}</style>"
+                    f" <style fg=\"{TAUPE}\">·</style> "
+                    f"<style fg=\"{TAUPE}\">{budget}</style>"
+                    f" <style fg=\"{TAUPE}\">·</style> "
+                    f"<style fg=\"{TAUPE}\">↵ send · Esc↵ newline · /help · Ctrl+C quit</style>"
+                )
+            )
+
         input_fn = make_prompt_fn(
             history_file=hist,
             multiline=multiline,
             force_plain=force_plain,
+            toolbar_fn=_toolbar if not force_plain else None,
+            model_name=_model_label(harness),
+            cwd=cwd,
         )
 
-    banner = Group(
-        Text("choreoai-cli coding agent", style="bold green"),
-        Text(f"cwd: {cwd}", style="dim"),
-        Text("Type /help for commands, /exit to quit.", style="dim"),
-    )
-    console.print(Panel(banner, title="choreoai-cli", border_style="green"))
+    print_banner(console, harness)
+    print_api_key_note(console)
 
     live: LiveEventSubscriber | None = None
     if live_stream:
-        live = LiveEventSubscriber(console)
+        live = LiveEventSubscriber(console, arg_tracker=arg_tracker)
         harness.add_subscriber(live)
 
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        console.print(
-            "[yellow]Note: ANTHROPIC_API_KEY is not set. "
-            "Live model calls will fail; offline/tests inject a fake model.[/yellow]"
-        )
-
-    spinner_ok = (
-        use_spinner
-        and console.is_terminal
-        and not console.quiet
-    )
+    spinner_ok = use_spinner and console.is_terminal and not console.quiet
 
     while True:
         try:
-            line = input_fn("choreoai> ")
+            line = input_fn("❯ ")
         except (EOFError, KeyboardInterrupt):
             console.print()
             break
@@ -431,26 +930,37 @@ def run_repl(
         if text in ("/exit", "/quit", "exit", "quit"):
             break
         if text == "/help":
-            console.print(HELP_TEXT)
+            print_help(console)
             continue
         if text == "/reset":
             harness.reset_session()
             if live is not None:
                 live.reset_turn_stats()
+            if arg_tracker is not None:
+                arg_tracker.clear()
             console.print(
-                "[dim]Session reset: budget ledger, shell approvals, and trace cleared.[/dim]"
+                Text(
+                    "Session reset: budget ledger, shell approvals, and trace cleared.",
+                    style=f"dim {TAUPE}",
+                )
             )
             continue
         if text.startswith("/"):
-            console.print(f"[yellow]Unknown command: {text}. Try /help.[/yellow]")
+            console.print(
+                Text(f"Unknown command: {text}. Try /help.", style="yellow")
+            )
             continue
 
         if live is not None:
             live.reset_turn_stats()
 
+        t0 = time.perf_counter()
         try:
             if spinner_ok:
-                with console.status("[bold cyan]thinking…[/bold cyan]", spinner="dots") as status:
+                with console.status(
+                    f"[{TERRACOTTA}]orchestrating…[/{TERRACOTTA}]",
+                    spinner="dots",
+                ) as status:
                     if live is not None:
                         live.bind_status(status)
                     try:
@@ -460,13 +970,18 @@ def run_repl(
                             live.bind_status(None)
             else:
                 result = harness.run(text)
+        except KeyboardInterrupt:
+            console.print()
+            console.print(Text("Turn cancelled.", style=f"dim {TAUPE}"))
+            continue
         except Exception as exc:
-            console.print(f"[red]Error: {exc}[/red]")
+            console.print(Text(f"Error: {exc}", style="red"))
             continue
 
-        print_result(console, harness, result, live=live)
+        elapsed = time.perf_counter() - t0
+        print_result(console, harness, result, live=live, elapsed_s=elapsed)
 
-    console.print("[dim]bye[/dim]")
+    console.print(Text("bye", style=f"dim {TAUPE}"))
     return 0
 
 
@@ -481,10 +996,21 @@ def build_live_harness(
     from choreoai.models import get_default_model
 
     model = get_default_model()
-    return CodingHarness.create(
+    harness = CodingHarness.create(
         model=model,
         cwd=cwd,
         auto=auto,
         max_steps=max_steps,
         step_budget=step_budget,
     )
+    # Pre-install arg tracker so tool cards have key arguments on first turn.
+    tracker = ToolArgTracker()
+    harness.tool_arg_tracker = tracker  # type: ignore[attr-defined]
+    try:
+        tools = list(harness.agent.tools)
+        instrumented = instrument_tools_for_ui(tools, tracker)
+        harness.agent.tools = instrumented
+        harness.agent._tool_map = {t.name: t for t in instrumented}  # noqa: SLF001
+    except Exception:
+        pass
+    return harness

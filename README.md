@@ -25,9 +25,10 @@ budget-bounded and observable.
 
 ## Features (v0)
 
-- Interactive REPL (`choreoai-cli`) with `/help`, `/reset`, `/exit`
-- Polished terminal UI: **rich** panels/markdown/syntax + **prompt_toolkit** history/multiline input
+- Interactive REPL (`choreoai-cli`) with `/help`, `/reset`, `/exit` (slash completion on `/`)
+- Claude-Code-style **inline** UI: terracotta brand, framed `❯` input + live toolbar, Markdown answers, compact tool cards (`✔`/`✗` + timing)
 - Live-streamed tool calls via ChoreoAI event subscribers (spinner while the model thinks)
+- Turn footer: tokens / est. cost / steps / budget remaining / elapsed
 - Coding tools: `read_file`, `write_file`, `list_dir`, `run_shell` (path jail under `--cwd`)
 - Shell commands require confirmation unless `--auto` is set
 - Built on ChoreoAI: `LLMAgent` tool loop, `Budget` + `Trace` middleware, typed event stream
@@ -94,8 +95,9 @@ choreoai-cli --cwd /path/to/project
 
 Anything else is sent to the coding agent as an instruction.
 
-Input uses `prompt_toolkit` when the terminal is interactive (history, Esc+Enter
-for multiline submit). Pipes and tests fall back to plain `input`.
+Input uses `prompt_toolkit` when the terminal is interactive (history, **Enter** to
+send, **Esc+Enter** for newline, `/` slash completion). Pipes and tests fall back
+to plain `input`.
 
 ### Environment
 

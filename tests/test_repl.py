@@ -66,7 +66,8 @@ async def test_live_subscriber_renders_tool_and_llm_events() -> None:
 
     out = buf.getvalue()
     assert "list_dir" in out
-    assert "tool" in out.lower() or "#" in out
+    # Compact tool card: icon + name + ✔/✗ (Claude-Code style)
+    assert "✔" in out or "✗" in out or "ok" in out.lower() or "tool" in out.lower()
     assert live.tool_count == 1
     assert live.llm_count == 1
     assert live.total_input_tokens == 10
