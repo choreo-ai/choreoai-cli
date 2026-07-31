@@ -417,7 +417,7 @@ def run_repl(
 
     while True:
         try:
-            line = input_fn("choreo> ")
+            line = input_fn("choreoai> ")
         except (EOFError, KeyboardInterrupt):
             console.print()
             break
