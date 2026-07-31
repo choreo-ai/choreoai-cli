@@ -8,6 +8,7 @@ terminal scrollback.
 
 from __future__ import annotations
 
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -17,7 +18,12 @@ from rich.text import Text
 
 from choreoai_cli.engine.query_engine import CodingHarness, QueryEngine
 from choreoai_cli.ui.footer import print_result
-from choreoai_cli.ui.header import model_label, print_api_key_note, print_banner
+from choreoai_cli.ui.header import (
+    model_label,
+    print_api_key_note,
+    print_banner,
+    print_demo_mode_note,
+)
 from choreoai_cli.ui.help import HELP_TEXT, print_help
 from choreoai_cli.ui.prompt import history_path, make_live_toolbar, make_prompt_fn
 from choreoai_cli.ui.theme import TAUPE, TERRACOTTA, glyphs, gutter_pad, make_console
@@ -38,10 +44,12 @@ __all__ = [
     "_looks_like_code",
     "_print_result",
     "_render_answer_body",
+    "build_demo_harness",
     "build_live_harness",
     "make_prompt_fn",
     "print_result",
     "run_repl",
+    "sync_demo_usage",
 ]
 
 _print_result = print_result
@@ -63,6 +71,31 @@ def _instrument_harness(harness: CodingHarness) -> ToolArgTracker:
     return arg_tracker
 
 
+def _is_demo_model(harness: Any) -> bool:
+    agent = getattr(harness, "agent", None)
+    model = getattr(agent, "model", None) if agent is not None else None
+    return bool(getattr(model, "is_demo", False))
+
+
+def sync_demo_usage(harness: Any, live: LiveEventSubscriber | None) -> None:
+    """Copy mock token usage into live footer stats (agent events omit tokens)."""
+    if live is None:
+        return
+    agent = getattr(harness, "agent", None)
+    model = getattr(agent, "model", None) if agent is not None else None
+    if model is None or not getattr(model, "is_demo", False):
+        return
+    drain = getattr(model, "drain_usage", None)
+    if not callable(drain):
+        return
+    inn, out = drain()
+    if inn or out:
+        live.total_input_tokens = int(inn)
+        live.total_output_tokens = int(out)
+        live.stats.total_input_tokens = live.total_input_tokens
+        live.stats.total_output_tokens = live.total_output_tokens
+
+
 def run_repl(
     harness: CodingHarness | QueryEngine,
     *,
@@ -72,6 +105,7 @@ def run_repl(
     use_spinner: bool = True,
     multiline: bool = True,
     history_file: Path | None | bool = None,
+    demo: bool | None = None,
 ) -> int:
     """Run the interactive loop until /exit or EOF. Returns process exit code."""
     # Accept QueryEngine or CodingHarness.
@@ -81,6 +115,8 @@ def run_repl(
     console = console or make_console()
     cwd = core.cwd
     g = glyphs()
+    if demo is None:
+        demo = _is_demo_model(core)
 
     arg_tracker = _instrument_harness(core)
 
@@ -102,7 +138,10 @@ def run_repl(
         )
 
     print_banner(console, core)
-    print_api_key_note(console)
+    if demo:
+        print_demo_mode_note(console)
+    else:
+        print_api_key_note(console)
 
     live: LiveEventSubscriber | None = None
     if live_stream:
@@ -193,11 +232,58 @@ def run_repl(
             continue
 
         elapsed = time.perf_counter() - t0
+        sync_demo_usage(core, live)
         print_result(console, core, result, live=live, elapsed_s=elapsed)
 
     console.print()
     console.print(gutter_pad(Text("bye", style=f"dim {TAUPE}")))
     return 0
+
+
+def _demo_shell_confirm(command: str, *, policy: Any) -> bool:
+    """Approve shell in non-TTY pipes so demos stay smooth; else real policy."""
+    try:
+        if not sys.stdin.isatty():
+            return True
+    except Exception:
+        return True
+    return bool(policy(command))
+
+
+def build_demo_harness(
+    *,
+    cwd: Path | None = None,
+    auto: bool = False,
+    max_steps: int = 10,
+    step_budget: float = 20.0,
+    delay_s: float = 0.12,
+) -> QueryEngine:
+    """Build a QueryEngine with the scripted demo mock model (no API key)."""
+    from choreoai_cli.engine.mock_model import make_demo_model
+    from choreoai_cli.permissions.approval import ShellApprovalPolicy
+    from choreoai_cli.permissions.context import PermissionContext
+
+    root = (cwd or Path.cwd()).resolve()
+    model = make_demo_model(cwd=root, delay_s=delay_s)
+    perm = PermissionContext.from_auto(auto)
+
+    confirm = None
+    if not auto:
+        # Keep interactive shell approval; auto-allow when stdin is piped.
+        policy = ShellApprovalPolicy(context=perm)
+        confirm = lambda cmd, _p=policy: _demo_shell_confirm(cmd, policy=_p)
+
+    engine = QueryEngine.create(
+        model=model,
+        cwd=root,
+        auto=auto,
+        confirm=confirm,
+        max_steps=max_steps,
+        step_budget=step_budget,
+        permission_context=perm,
+    )
+    _instrument_harness(engine.harness)
+    return engine
 
 
 def build_live_harness(

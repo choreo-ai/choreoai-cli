@@ -10,6 +10,7 @@ from choreoai_cli.engine.events import (
     TurnStats,
     adapt_choreoai_event,
 )
+from choreoai_cli.engine.mock_model import DemoChatModel, make_demo_model
 from choreoai_cli.engine.query_engine import (
     CODING_SYSTEM_PROMPT,
     DEFAULT_STEP_BUDGET,
@@ -24,6 +25,7 @@ __all__ = [
     "DEFAULT_STEP_BUDGET",
     "AnswerChunk",
     "CodingHarness",
+    "DemoChatModel",
     "LlmCallEvent",
     "QueryEngine",
     "RunResult",
@@ -35,4 +37,5 @@ __all__ = [
     "TurnStats",
     "adapt_choreoai_event",
     "is_terminal",
+    "make_demo_model",
 ]

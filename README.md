@@ -75,6 +75,10 @@ If `choreoai` is already installed editable, `pip install -e ".[dev]"` will sati
 export ANTHROPIC_API_KEY=sk-ant-...
 choreoai-cli
 
+# Demo / mock mode — full UI (tool cards, Markdown answer, footer) without an API key
+# Also auto-enabled when ANTHROPIC_API_KEY is unset
+choreoai-cli --demo
+
 # Skip shell confirmation prompts (use carefully)
 choreoai-cli --auto
 
@@ -103,9 +107,9 @@ to plain `input`.
 
 | Variable            | Required | Notes                                      |
 |---------------------|----------|--------------------------------------------|
-| `ANTHROPIC_API_KEY` | For live | Default model is `claude-sonnet-5`         |
+| `ANTHROPIC_API_KEY` | For live | Default model is `claude-sonnet-5`. If unset, the CLI enters **demo mode** (scripted mock model). |
 
-Offline tests inject a fake `BaseChatModel` and do **not** need an API key.
+Offline tests inject a fake `BaseChatModel` and do **not** need an API key. Demo mode uses a separate scripted model so the REPL still shows tool cards and answers without a key.
 
 ## Tests
 

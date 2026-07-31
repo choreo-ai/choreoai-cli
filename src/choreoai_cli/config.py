@@ -17,6 +17,7 @@ class CliConfig:
     max_steps: int = 10
     step_budget: float = 20.0
     command: str | None = None
+    demo: bool = False
 
     @property
     def permission_mode(self) -> PermissionMode:

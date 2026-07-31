@@ -47,6 +47,14 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Run a single instruction non-interactively, then exit.",
     )
+    parser.add_argument(
+        "--demo",
+        action="store_true",
+        help=(
+            "Force demo mode: scripted mock model (tool cards + Markdown answer) "
+            "without calling a live API. Auto-enabled when ANTHROPIC_API_KEY is unset."
+        ),
+    )
     args = parser.parse_args(argv)
 
     from choreoai_cli.app import config_from_args, run_app
@@ -57,6 +65,7 @@ def main(argv: list[str] | None = None) -> int:
         max_steps=args.max_steps,
         step_budget=args.step_budget,
         command=args.command,
+        demo=args.demo,
     )
     return run_app(config)
 

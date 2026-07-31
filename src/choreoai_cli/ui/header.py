@@ -84,8 +84,21 @@ def print_banner(console: Console, harness: Any) -> None:
     console.print()
 
 
+def print_demo_mode_note(console: Console) -> None:
+    """One-line note when the session uses the scripted mock model."""
+    from choreoai_cli.ui.theme import gutter_pad
+
+    g = glyphs()
+    note = Text()
+    note.append("Demo mode", style=f"bold {TERRACOTTA}")
+    note.append(f" {g.emdash} ", style=f"dim {TAUPE}")
+    note.append("mock responses, no API key", style=TAUPE)
+    console.print(gutter_pad(note))
+    console.print()
+
+
 def print_api_key_note(console: Console) -> None:
-    """Friendly note when the Anthropic key is missing (shell still starts)."""
+    """Friendly note when the Anthropic key is missing (live path only)."""
     if os.environ.get("ANTHROPIC_API_KEY"):
         return
     note = Text()
