@@ -30,11 +30,13 @@ This pulls **choreoai** from GitHub (`git+https://github.com/choreo-ai/choreo`) 
 
 ### Local choreoai development
 
-If you have a local checkout of choreo and want offline / editable installs:
+If you have a local checkout of choreo and want offline / editable installs
+(avoids resolving the git dependency against the same package name):
 
 ```bash
 pip install -e /path/to/choreo
-pip install -e ".[dev]"
+pip install rich pytest pytest-asyncio
+pip install -e . --no-deps
 ```
 
 ## Usage
