@@ -1,8 +1,8 @@
-# choreo-cli
+# choreoai-cli
 
 **A Claude-Code-style coding agent harness built on [choreoai](https://github.com/choreo-ai/choreo).**
 
-`choreo-cli` is an interactive terminal REPL that runs a coding agent in your current
+`choreoai-cli` is an interactive terminal REPL that runs a coding agent in your current
 directory using choreoai's `LLMAgent`, tools, budget, and trace — so the harness itself is
 budget-bounded and observable.
 
@@ -10,50 +10,61 @@ budget-bounded and observable.
 
 ## Features (v0)
 
-- Interactive REPL (`choreo-cli`) with `/help`, `/reset`, `/exit`
+- Interactive REPL (`choreoai-cli`) with `/help`, `/reset`, `/exit`
 - Coding tools: `read_file`, `write_file`, `list_dir`, `run_shell`
 - Shell commands require confirmation unless `--auto` is set
 - Built on choreoai: `LLMAgent` tool loop, `Budget` + `Trace` middleware, typed event stream
 - Default model: `claude-sonnet-5` (via choreoai / Anthropic)
 
-## Install from source
+## Install
 
 Requires **Python 3.10+**.
 
 ```bash
-git clone https://github.com/choreo-ai/choreo-cli
-cd choreo-cli
+pip install choreoai-cli
+```
+
+This installs the PyPI package `choreoai-cli` and its dependency `choreoai` (also from PyPI).
+
+### Install from source
+
+```bash
+git clone https://github.com/choreo-ai/choreoai-cli
+cd choreoai-cli
 pip install -e ".[dev]"
 ```
 
-This pulls **choreoai** from GitHub (`git+https://github.com/choreo-ai/choreo`) as a dependency.
-
 ### Local choreoai development
 
-If you have a local checkout of choreo and want offline / editable installs
-(avoids resolving the git dependency against the same package name):
+PyPI requires a normal version pin (`choreoai>=0.0.1`), not a git URL. For local / offline
+development against a checkout of the framework:
 
 ```bash
-pip install -e /path/to/choreo
-pip install rich pytest pytest-asyncio
-pip install -e . --no-deps
+# Install framework from local checkout first (editable)
+pip install -e C:\karthik\repos\choreo   # or: pip install -e /path/to/choreo
+
+# Then install the CLI (and optional dev extras)
+pip install -e ".[dev]"
 ```
+
+If `choreoai` is already installed editable, `pip install -e ".[dev]"` will satisfy
+`choreoai>=0.0.1` without hitting PyPI for that package.
 
 ## Usage
 
 ```bash
 # Live agent (requires ANTHROPIC_API_KEY)
 export ANTHROPIC_API_KEY=sk-ant-...
-choreo-cli
+choreoai-cli
 
 # Skip shell confirmation prompts (use carefully)
-choreo-cli --auto
+choreoai-cli --auto
 
 # Single non-interactive command
-choreo-cli -c "List the files in this directory"
+choreoai-cli -c "List the files in this directory"
 
 # Custom working directory
-choreo-cli --cwd /path/to/project
+choreoai-cli --cwd /path/to/project
 ```
 
 ### REPL commands
@@ -77,6 +88,8 @@ Offline tests inject a fake `BaseChatModel` and do **not** need an API key.
 ## Tests
 
 ```bash
+# Prefer editable local choreoai if you have a checkout
+pip install -e /path/to/choreo
 pip install -e ".[dev]"
 pytest
 ```

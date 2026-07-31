@@ -1,4 +1,4 @@
-"""Console entry point for choreo-cli."""
+"""Console entry point for choreoai-cli."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from pathlib import Path
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="choreo-cli",
+        prog="choreoai-cli",
         description="Interactive coding-agent harness built on choreoai.",
     )
     parser.add_argument(

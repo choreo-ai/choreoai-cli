@@ -73,8 +73,8 @@ def run_repl(
     cwd = harness.cwd
     console.print(
         Panel(
-            f"choreo-cli coding agent\ncwd: {cwd}\nType /help for commands, /exit to quit.",
-            title="choreo-cli",
+            f"choreoai-cli coding agent\ncwd: {cwd}\nType /help for commands, /exit to quit.",
+            title="choreoai-cli",
             border_style="green",
         )
     )

@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "choreo-cli"
+name = "choreoai-cli"
 version = "0.0.1"
 description = "A Claude-Code-style coding agent harness built on choreoai."
 readme = "README.md"
@@ -23,7 +23,7 @@ classifiers = [
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
-  "choreoai @ git+https://github.com/choreo-ai/choreo",
+  "choreoai>=0.0.1",
   "rich",
 ]
 
@@ -34,15 +34,12 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/choreo-ai/choreo-cli"
-Repository = "https://github.com/choreo-ai/choreo-cli"
-Issues = "https://github.com/choreo-ai/choreo-cli/issues"
+Homepage = "https://github.com/choreo-ai/choreoai-cli"
+Repository = "https://github.com/choreo-ai/choreoai-cli"
+Issues = "https://github.com/choreo-ai/choreoai-cli/issues"
 
 [project.scripts]
-choreo-cli = "choreo_cli.__main__:main"
-
-[tool.hatch.metadata]
-allow-direct-references = true
+choreoai-cli = "choreo_cli.__main__:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/choreo_cli"]
