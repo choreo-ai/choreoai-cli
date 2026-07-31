@@ -11,6 +11,10 @@ from langchain_core.tools import BaseTool, StructuredTool
 from pydantic import BaseModel, Field
 
 
+class PathJailError(ValueError):
+    """Raised when a path resolves outside the session root."""
+
+
 class ReadFileInput(BaseModel):
     path: str = Field(description="Path to the file to read (relative or absolute).")
 
@@ -31,11 +35,25 @@ class RunShellInput(BaseModel):
     command: str = Field(description="Shell command to execute in the working directory.")
 
 
-def _resolve(path: str, cwd: Path) -> Path:
+def _resolve_under_root(path: str, root: Path) -> Path:
+    """Resolve ``path`` and reject anything that escapes ``root``.
+
+    Relative paths are joined to ``root``. Absolute paths are allowed only when
+    they still resolve under ``root``. ``../`` traversal out of the root raises
+    ``PathJailError``.
+    """
+    root_resolved = root.resolve()
     p = Path(path)
     if not p.is_absolute():
-        p = cwd / p
-    return p.resolve()
+        p = root_resolved / p
+    target = p.resolve()
+    try:
+        target.relative_to(root_resolved)
+    except ValueError as exc:
+        raise PathJailError(
+            f"path escapes session root: {path!r} -> {target} (root={root_resolved})"
+        ) from exc
+    return target
 
 
 def make_read_file(cwd: Path | None = None) -> BaseTool:
@@ -43,7 +61,10 @@ def make_read_file(cwd: Path | None = None) -> BaseTool:
     root = (cwd or Path.cwd()).resolve()
 
     def _read(path: str) -> str:
-        target = _resolve(path, root)
+        try:
+            target = _resolve_under_root(path, root)
+        except PathJailError as exc:
+            return f"error: {exc}"
         if not target.exists():
             return f"error: file not found: {path}"
         if not target.is_file():
@@ -66,7 +87,10 @@ def make_write_file(cwd: Path | None = None) -> BaseTool:
     root = (cwd or Path.cwd()).resolve()
 
     def _write(path: str, content: str) -> str:
-        target = _resolve(path, root)
+        try:
+            target = _resolve_under_root(path, root)
+        except PathJailError as exc:
+            return f"error: {exc}"
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content, encoding="utf-8")
@@ -87,7 +111,10 @@ def make_list_dir(cwd: Path | None = None) -> BaseTool:
     root = (cwd or Path.cwd()).resolve()
 
     def _list(path: str = ".") -> str:
-        target = _resolve(path, root)
+        try:
+            target = _resolve_under_root(path, root)
+        except PathJailError as exc:
+            return f"error: {exc}"
         if not target.exists():
             return f"error: directory not found: {path}"
         if not target.is_dir():
@@ -110,6 +137,66 @@ def make_list_dir(cwd: Path | None = None) -> BaseTool:
     )
 
 
+class ShellApprovalPolicy:
+    """Session-scoped shell approval: y/N, always-allow, and deny patterns.
+
+    Prompt answers (case-insensitive):
+      - y / yes     — allow this command once
+      - n / no / '' — deny this command once
+      - a / always  — allow all shell commands for the rest of the session
+      - deny <pat>  — add a deny substring pattern and reject this command
+      - d <pat>     — same as deny <pat>
+    """
+
+    def __init__(self, input_fn: Callable[[str], str] | None = None) -> None:
+        self.always_allow = False
+        self.deny_patterns: list[str] = []
+        self._input = input_fn if input_fn is not None else input
+
+    def reset(self) -> None:
+        """Clear session always-allow and deny patterns (e.g. on /reset)."""
+        self.always_allow = False
+        self.deny_patterns.clear()
+
+    def matches_deny(self, command: str) -> str | None:
+        """Return the first matching deny pattern, or None."""
+        for pattern in self.deny_patterns:
+            if pattern and pattern in command:
+                return pattern
+        return None
+
+    def __call__(self, command: str) -> bool:
+        denied = self.matches_deny(command)
+        if denied is not None:
+            return False
+        if self.always_allow:
+            return True
+        try:
+            answer = self._input(
+                "Allow shell command? [y/N/always/deny <pattern>]\n"
+                f"  $ {command}\n> "
+            ).strip()
+        except EOFError:
+            return False
+
+        lower = answer.lower()
+        if lower in ("y", "yes"):
+            return True
+        if lower in ("a", "always"):
+            self.always_allow = True
+            return True
+        if lower.startswith("deny ") or lower.startswith("d "):
+            parts = answer.split(None, 1)
+            if len(parts) == 2 and parts[1].strip():
+                self.deny_patterns.append(parts[1].strip())
+            return False
+        if lower == "deny":
+            # Deny this exact command string for the rest of the session.
+            self.deny_patterns.append(command)
+            return False
+        return False
+
+
 def make_run_shell(
     cwd: Path | None = None,
     *,
@@ -119,22 +206,21 @@ def make_run_shell(
     """Create a run_shell tool.
 
     By default, prompts for confirmation before executing (Claude-Code-style
-    approval). Pass ``auto=True`` or a custom ``confirm`` callable to change
-    that behavior.
+    approval with session always-allow and deny patterns). Pass ``auto=True``
+    or a custom ``confirm`` callable to change that behavior.
     """
     root = (cwd or Path.cwd()).resolve()
-
-    def _default_confirm(command: str) -> bool:
-        try:
-            answer = input(f"Allow shell command? [y/N]\n  $ {command}\n> ").strip().lower()
-        except EOFError:
-            return False
-        return answer in ("y", "yes")
-
-    conf = confirm if confirm is not None else _default_confirm
+    conf = confirm if confirm is not None else ShellApprovalPolicy()
 
     def _run(command: str) -> str:
         if not auto:
+            if conf is not None and hasattr(conf, "matches_deny"):
+                pattern = conf.matches_deny(command)  # type: ignore[attr-defined]
+                if pattern is not None:
+                    return (
+                        f"error: shell command rejected by deny pattern "
+                        f"({pattern!r})"
+                    )
             if not conf(command):
                 return "error: shell command rejected by user"
         try:
