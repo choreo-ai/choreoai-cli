@@ -25,9 +25,9 @@ jobs:
       - name: Install package and deps
         run: |
           python -m pip install --upgrade pip
-          # Install framework from GitHub until choreoai is on PyPI (or use a
-          # published release once available). Satisfies choreoai>=0.0.1.
-          pip install "git+https://github.com/choreo-ai/choreo"
+          # choreoai is not on PyPI yet; install from git first so
+          # choreoai>=0.0.1 in pyproject is already satisfied offline-from-index.
+          pip install "choreoai @ git+https://github.com/choreo-ai/choreo"
           pip install -e ".[dev]"
 
 
