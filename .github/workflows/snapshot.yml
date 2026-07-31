@@ -1,14 +1,22 @@
 # Publish a TestPyPI snapshot on every push to main (and on manual dispatch).
 #
-# Each commit gets a unique PEP 440 version so successive main pushes always
-# produce a new installable build:
-#   {pyproject version}.dev{run_number}+g{short_sha}
-# Example: 0.0.6.dev42+g1a2b3c4
+# Versioning (Option 1 — one snapshot line in source, unique builds at publish):
+#   Source (repo):     0.0.6.dev0
+#   Each TestPyPI build: 0.0.6.devYYYYMMDDHHMMSS  (UTC timestamp)
+#   Example:           0.0.6.dev20260731120001
 #
-# Install:
+# The repo stays on the 0.0.6 development line; only CI rewrites the version
+# for the build artifact (not committed back).
+#
+# Install latest snapshot:
 #   pip install -i https://test.pypi.org/simple/ \
 #     --extra-index-url https://pypi.org/simple/ \
-#     'choreoai-cli==0.0.6.dev42+g1a2b3c4'
+#     --pre choreoai-cli
+#
+# Or pin a specific build:
+#   pip install -i https://test.pypi.org/simple/ \
+#     --extra-index-url https://pypi.org/simple/ \
+#     'choreoai-cli==0.0.6.dev20260731120001'
 #
 # Trusted Publisher (on https://test.pypi.org, not pypi.org):
 #   owner: choreo-ai, repo: choreoai-cli, workflow: snapshot.yml, environment: testpypi
@@ -43,29 +51,27 @@ jobs:
         with:
           python-version: "3.x"
 
-      - name: Stamp unique snapshot version
+      - name: Stamp unique snapshot version (UTC timestamp)
         id: stamp
-        env:
-          RUN_NUMBER: ${{ github.run_number }}
-          SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           python - <<'PY'
           import os
           import re
+          from datetime import datetime, timezone
           from pathlib import Path
-
-          run = os.environ["RUN_NUMBER"]
-          sha = os.environ["SHA"][:7]
 
           pyproject = Path("pyproject.toml")
           text = pyproject.read_text(encoding="utf-8")
           m = re.search(r'^version\s*=\s*"([^"]+)"', text, re.M)
           if not m:
               raise SystemExit("version not found in pyproject.toml")
-          base = m.group(1).split("+", 1)[0]
-          base = re.sub(r"\.dev\d+$", "", base)
-          snap = f"{base}.dev{run}+g{sha}"
+
+          # Source is e.g. 0.0.6.dev0 → public line 0.0.6 → build 0.0.6.devYYYYMMDDHHMMSS
+          raw = m.group(1).split("+", 1)[0]
+          base = re.sub(r"\.dev\d+$", "", raw)
+          stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+          snap = f"{base}.dev{stamp}"
 
           text, n = re.subn(
               r'^version\s*=\s*"[^"]+"',
@@ -91,11 +97,10 @@ jobs:
               raise SystemExit("failed to update __version__ in src/choreo_cli/__init__.py")
           init.write_text(init_text, encoding="utf-8")
 
-          # Delimiter form is safer for PEP 440 local versions containing '+'.
-          out = os.environ["GITHUB_OUTPUT"]
-          with open(out, "a", encoding="utf-8") as fh:
-              fh.write(f"snapshot_version<<EOF\n{snap}\nEOF\n")
-          print(f"Stamped snapshot version: {snap}")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+              fh.write(f"snapshot_version={snap}\n")
+          print(f"Source version line: {raw}")
+          print(f"Stamped TestPyPI version: {snap}")
           PY
 
       - name: Build distributions
@@ -118,6 +123,12 @@ jobs:
             echo ""
             echo "Version: \`${{ steps.stamp.outputs.snapshot_version }}\`"
             echo ""
+            echo "Latest on this line (includes pre-releases):"
+            echo '```bash'
+            echo "pip install -i https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ --pre --upgrade choreoai-cli"
+            echo '```'
+            echo ""
+            echo "Pin this build:"
             echo '```bash'
             echo "pip install -i https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ 'choreoai-cli==${{ steps.stamp.outputs.snapshot_version }}'"
             echo '```'
