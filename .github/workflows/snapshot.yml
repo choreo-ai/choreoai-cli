@@ -1,0 +1,70 @@
+# Build and publish a development snapshot of choreoai-cli to TestPyPI.
+#
+# Uses TestPyPI Trusted Publishing (OIDC) via pypa/gh-action-pypi-publish —
+# no API token is stored in the repository.
+#
+# IMPORTANT: Configure this publisher on https://test.pypi.org (not pypi.org):
+#   owner: choreo-ai, repo: choreoai-cli, workflow: snapshot.yml, environment: testpypi
+#
+# Production PyPI and TestPyPI have separate Trusted Publisher registries.
+#
+# https://docs.pypi.org/trusted-publishers/
+
+name: Snapshot
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot-build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Build distributions
+        run: |
+          python -m pip install --upgrade pip
+          pip install build
+          python -m build
+
+      - name: Upload distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: snapshot-dists
+          path: dist/
+
+  testpypi-publish:
+    runs-on: ubuntu-latest
+    needs:
+      - snapshot-build
+    permissions:
+      # Mandatory for Trusted Publishing (OIDC)
+      id-token: write
+    environment:
+      name: testpypi
+
+    steps:
+      - name: Retrieve distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: snapshot-dists
+          path: dist/
+
+      - name: Publish distributions to TestPyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
+          repository-url: https://test.pypi.org/legacy/
+          # Allow re-upload of the same version from repeated main pushes
+          # only when the file content is identical (dev iterations use same version).
+          skip-existing: true

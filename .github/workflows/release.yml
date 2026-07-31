@@ -1,20 +1,16 @@
-# This workflow builds and publishes the package to PyPI when a GitHub
-# Release is published.
+# Build and publish choreoai-cli to PyPI when a GitHub Release is published.
 #
 # Uses PyPI Trusted Publishing (OIDC) via pypa/gh-action-pypi-publish —
 # no API token is stored in the repository.
 #
-# IMPORTANT: Configure Trusted Publishing on https://pypi.org for this
-# project (owner: choreo-ai, repo: choreoai-cli, workflow: python-publish.yml,
-# environment: pypi) before the first release, or the publish step will fail.
+# PyPI Trusted Publisher must match exactly:
+#   owner: choreo-ai, repo: choreoai-cli, workflow: release.yml, environment: pypi
 #
 # Publish order: publish choreoai first, then this package (depends on choreoai).
 #
-# For more information see:
-# https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-python
 # https://docs.pypi.org/trusted-publishers/
 
-name: Upload Python Package
+name: Release
 
 on:
   release:
@@ -51,7 +47,7 @@ jobs:
     needs:
       - release-build
     permissions:
-      # IMPORTANT: this permission is mandatory for Trusted Publishing
+      # Mandatory for Trusted Publishing (OIDC)
       id-token: write
     environment:
       name: pypi
