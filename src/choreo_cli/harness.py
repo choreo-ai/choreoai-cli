@@ -9,7 +9,6 @@ from typing import Any, Callable
 from langchain_core.language_models import BaseChatModel
 from langchain_core.tools import BaseTool
 
-# Import core before reliability to avoid a package circular import in choreoai.
 from choreo.agents import LLMAgent
 from choreo.core import (
     BudgetMiddleware,
@@ -17,11 +16,12 @@ from choreo.core import (
     ListSubscriber,
     OnionMiddlewareStack,
     SimpleEventEmitter,
+    Subscriber,
     TraceMiddleware,
 )
-from choreo.reliability import BudgetDimensions, InMemoryBudget  # noqa: E402
+from choreo.reliability import BudgetDimensions, InMemoryBudget
 
-from choreo_cli.tools import default_tools
+from choreo_cli.tools import ShellApprovalPolicy, default_tools
 
 CODING_SYSTEM_PROMPT = """\
 You are a careful coding assistant working in a local project directory.
@@ -49,7 +49,12 @@ class RunResult:
 
 @dataclass
 class CodingHarness:
-    """Wires choreoai LLMAgent with budget/trace middleware and coding tools."""
+    """Wires choreoai LLMAgent with budget/trace middleware and coding tools.
+
+    Session state (shared across REPL turns):
+    - One ``InMemoryRunContext`` budget ledger (cumulative cap)
+    - Optional ``ShellApprovalPolicy`` (always-allow / deny patterns)
+    """
 
     agent: LLMAgent
     budget: InMemoryBudget
@@ -58,6 +63,8 @@ class CodingHarness:
     cwd: Path
     max_steps: int = 10
     step_budget: float = DEFAULT_STEP_BUDGET
+    session_context: InMemoryRunContext | None = None
+    shell_policy: ShellApprovalPolicy | None = None
 
     @classmethod
     def create(
@@ -78,7 +85,16 @@ class CodingHarness:
         subscriber = ListSubscriber(name="harness_trace")
         emitter.subscribe(subscriber)
 
-        tool_list = tools if tools is not None else default_tools(root, auto=auto, confirm=confirm)
+        shell_policy: ShellApprovalPolicy | None = None
+        if confirm is None and not auto:
+            shell_policy = ShellApprovalPolicy()
+            confirm = shell_policy
+        elif isinstance(confirm, ShellApprovalPolicy):
+            shell_policy = confirm
+
+        tool_list = tools if tools is not None else default_tools(
+            root, auto=auto, confirm=confirm
+        )
         agent = LLMAgent(
             name=name,
             instructions=instructions,
@@ -88,7 +104,7 @@ class CodingHarness:
             emitter=emitter,
         )
         budget = InMemoryBudget(caps={BudgetDimensions.STEPS.value: step_budget})
-        return cls(
+        harness = cls(
             agent=agent,
             budget=budget,
             emitter=emitter,
@@ -96,14 +112,46 @@ class CodingHarness:
             cwd=root,
             max_steps=max_steps,
             step_budget=step_budget,
+            shell_policy=shell_policy,
+        )
+        harness.reset_session()
+        return harness
+
+    def _new_session_context(self) -> InMemoryRunContext:
+        return InMemoryRunContext(
+            budget_ledger={
+                "caps": {BudgetDimensions.STEPS.value: self.step_budget},
+                "consumed": {},
+                "labels": {},
+            }
         )
 
     def reset_trace(self) -> None:
         """Clear collected events (e.g. between REPL turns)."""
         self.subscriber.events.clear()
 
+    def reset_session(self) -> None:
+        """Clear session budget ledger, trace, and shell approval session state."""
+        self.reset_trace()
+        self.session_context = self._new_session_context()
+        # Fresh internal budget (context ledger is authoritative when present).
+        self.budget = InMemoryBudget(caps={BudgetDimensions.STEPS.value: self.step_budget})
+        if self.shell_policy is not None:
+            self.shell_policy.reset()
+
+    def ensure_session_context(self) -> InMemoryRunContext:
+        """Return the shared session RunContext, creating one if needed."""
+        if self.session_context is None:
+            self.session_context = self._new_session_context()
+        return self.session_context
+
+    def add_subscriber(self, subscriber: Subscriber) -> None:
+        """Subscribe an extra event consumer (e.g. live REPL streamer)."""
+        self.emitter.subscribe(subscriber)
+
     def budget_summary(self, context: InMemoryRunContext | None = None) -> str:
-        snap = self.budget.snapshot(context=context)
+        ctx = context if context is not None else self.session_context
+        snap = self.budget.snapshot(context=ctx)
         parts: list[str] = []
         for dim, cap in snap.caps.items():
             used = snap.consumed.get(dim, 0.0)
@@ -125,15 +173,13 @@ class CodingHarness:
         return "; ".join(bits)
 
     async def arun(self, instruction: str) -> RunResult:
-        """Run one agent turn under Budget + Trace middleware."""
+        """Run one agent turn under Budget + Trace middleware.
+
+        Uses the **session** RunContext ledger so budget consumption accumulates
+        across REPL turns until ``reset_session`` / ``/reset``.
+        """
         self.reset_trace()
-        context = InMemoryRunContext(
-            budget_ledger={
-                "caps": {BudgetDimensions.STEPS.value: self.step_budget},
-                "consumed": {},
-                "labels": {},
-            }
-        )
+        context = self.ensure_session_context()
 
         async def run_agent(value: object) -> object:
             return await self.agent.ainvoke(

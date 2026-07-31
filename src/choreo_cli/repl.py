@@ -9,43 +9,72 @@ from typing import Any
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
-from rich.table import Table
+
+from choreo.core.events import Event, Subscriber
 
 from choreo_cli.harness import CodingHarness, RunResult
 
 HELP_TEXT = """\
 Commands:
   /help   Show this help
-  /reset  Clear session note (new budget/trace per turn already)
+  /reset  Clear session budget ledger, shell approvals, and trace
   /exit   Quit the REPL
 
 Anything else is sent to the coding agent as an instruction.
+
+Shell approval (when not --auto):
+  y / yes           allow this command once
+  n / no            deny this command once
+  always / a        allow all shell commands for this session
+  deny <pattern>    reject commands containing <pattern> for this session
 """
 
 
-def _print_tool_events(console: Console, result: RunResult) -> None:
-    tools = [e for e in result.events if getattr(e, "type", None) == "tool_called"]
-    if not tools:
-        return
-    table = Table(title="Tool calls", show_header=True, header_style="bold")
-    table.add_column("tool")
-    table.add_column("ok")
-    table.add_column("ms")
-    for e in tools:
-        ok = "yes" if getattr(e, "success", False) else "no"
-        ms = getattr(e, "duration_ms", None)
-        ms_s = f"{ms:.0f}" if isinstance(ms, (int, float)) else "-"
-        table.add_row(str(getattr(e, "tool_name", "?")), ok, ms_s)
-    console.print(table)
+class LiveEventSubscriber(Subscriber):
+    """Print tool-call (and related) events to the console as they arrive."""
+
+    name = "live_repl"
+
+    def __init__(self, console: Console, *, name: str = "live_repl") -> None:
+        self.name = name
+        self.console = console
+
+    async def on_event(self, event: Event) -> None:
+        etype = getattr(event, "type", None)
+        if etype == "tool_called":
+            tool_name = getattr(event, "tool_name", "?")
+            ok = getattr(event, "success", False)
+            ms = getattr(event, "duration_ms", None)
+            ms_s = f" ({ms:.0f}ms)" if isinstance(ms, (int, float)) else ""
+            err = getattr(event, "error", None)
+            status = "ok" if ok else "fail"
+            line = f"[bold cyan]tool[/bold cyan] {tool_name} [{status}]{ms_s}"
+            if err:
+                line += f" — {err}"
+            self.console.print(line)
+        elif etype == "llm_called":
+            ok = getattr(event, "success", True)
+            if not ok:
+                err = getattr(event, "error", None) or "llm error"
+                self.console.print(f"[yellow]llm[/yellow] fail — {err}")
+        elif etype == "run_started":
+            self.console.print("[dim]run started…[/dim]")
+        elif etype == "run_finished":
+            status = getattr(event, "status", "?")
+            self.console.print(f"[dim]run finished ({status})[/dim]")
 
 
 def _print_result(console: Console, harness: CodingHarness, result: RunResult) -> None:
-    _print_tool_events(console, result)
-
     text = result.output if result.output is not None else "(no output)"
     if not isinstance(text, str):
         text = str(text)
-    console.print(Panel(Markdown(text) if text.strip() else text, title="Answer", border_style="cyan"))
+    console.print(
+        Panel(
+            Markdown(text) if text.strip() else text,
+            title="Answer",
+            border_style="cyan",
+        )
+    )
 
     snap = result.budget_snapshot
     budget_line = "budget: "
@@ -67,17 +96,22 @@ def run_repl(
     *,
     console: Console | None = None,
     input_fn: Any = input,
+    live_stream: bool = True,
 ) -> int:
     """Run the interactive loop until /exit or EOF. Returns process exit code."""
     console = console or Console()
     cwd = harness.cwd
     console.print(
         Panel(
-            f"choreoai-cli coding agent\ncwd: {cwd}\nType /help for commands, /exit to quit.",
+            f"choreoai-cli coding agent\ncwd: {cwd}\n"
+            "Type /help for commands, /exit to quit.",
             title="choreoai-cli",
             border_style="green",
         )
     )
+
+    if live_stream:
+        harness.add_subscriber(LiveEventSubscriber(console))
 
     if not os.environ.get("ANTHROPIC_API_KEY"):
         console.print(
@@ -104,8 +138,10 @@ def run_repl(
             console.print(HELP_TEXT)
             continue
         if text == "/reset":
-            harness.reset_trace()
-            console.print("[dim]Trace cleared. Each turn already uses a fresh budget ledger.[/dim]")
+            harness.reset_session()
+            console.print(
+                "[dim]Session reset: budget ledger, shell approvals, and trace cleared.[/dim]"
+            )
             continue
         if text.startswith("/"):
             console.print(f"[yellow]Unknown command: {text}. Try /help.[/yellow]")
