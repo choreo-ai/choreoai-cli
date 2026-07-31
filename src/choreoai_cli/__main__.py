@@ -8,6 +8,11 @@ from pathlib import Path
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Before any Rich Console / banner: force UTF-8 and pick glyph mode.
+    from choreoai_cli.stdio import init_output, make_console
+
+    init_output()
+
     parser = argparse.ArgumentParser(
         prog="choreoai-cli",
         description="Interactive coding-agent harness built on choreoai.",
@@ -44,11 +49,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    from rich.console import Console
-
     from choreoai_cli.repl import build_live_harness, print_result, run_repl
 
-    console = Console()
+    console = make_console()
     cwd = args.cwd.resolve() if args.cwd else Path.cwd()
 
     try:

@@ -29,6 +29,7 @@ from rich.text import Text
 from choreoai.core.events import Event, Subscriber
 
 from choreoai_cli.harness import CodingHarness, RunResult
+from choreoai_cli.stdio import glyphs, make_console
 
 # ---------------------------------------------------------------------------
 # Brand palette (truecolor; Rich / terminal may degrade gracefully)
@@ -49,13 +50,10 @@ SLASH_COMMANDS: list[tuple[str, str]] = [
     ("/exit", "Quit the REPL"),
 ]
 
-# Tool display icons (compact, monochrome-friendly)
-_TOOL_ICONS: dict[str, str] = {
-    "read_file": "◎",
-    "write_file": "✎",
-    "list_dir": "▦",
-    "run_shell": "›",
-}
+
+def _tool_icons() -> dict[str, str]:
+    """Tool display icons (Unicode when safe, ASCII fallback otherwise)."""
+    return glyphs().tool_icons()
 
 
 class ToolArgTracker:
@@ -111,19 +109,21 @@ def summarize_tool_args(tool_name: str, kwargs: dict[str, Any]) -> str:
         return str(kwargs.get("path", ".") or ".")
     if tool_name == "run_shell":
         cmd = str(kwargs.get("command", "") or "")
-        return (cmd[:72] + "…") if len(cmd) > 72 else cmd
+        g = glyphs()
+        return (cmd[:72] + g.ellipsis) if len(cmd) > 72 else cmd
     # Generic fallback: first short string value
+    ell = glyphs().ellipsis
     for key in ("path", "command", "query", "file", "name"):
         if key in kwargs and kwargs[key] is not None:
             s = str(kwargs[key])
-            return (s[:72] + "…") if len(s) > 72 else s
+            return (s[:72] + ell) if len(s) > 72 else s
     if not kwargs:
         return ""
     bits = []
     for k, v in list(kwargs.items())[:3]:
         sv = str(v)
         if len(sv) > 40:
-            sv = sv[:40] + "…"
+            sv = sv[:40] + ell
         bits.append(f"{k}={sv}")
     return " ".join(bits)
 
@@ -136,7 +136,7 @@ def preview_tool_result(result: Any, *, limit: int = 80) -> str:
         lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
         first = lines[0] if lines else ""
     if len(first) > limit:
-        return first[: limit - 1] + "…"
+        return first[: limit - 1] + glyphs().ellipsis
     return first
 
 
@@ -197,7 +197,7 @@ def _history_path() -> Path:
 def _model_label(harness: CodingHarness) -> str:
     model = getattr(harness.agent, "model", None)
     if model is None:
-        return "—"
+        return glyphs().emdash
     for attr in ("model", "model_name", "model_id"):
         val = getattr(model, attr, None)
         if isinstance(val, str) and val:
@@ -219,7 +219,7 @@ def _short_cwd(cwd: Path, *, max_len: int = 48) -> str:
     except OSError:
         s = str(cwd)
     if len(s) > max_len:
-        return "…" + s[-(max_len - 1) :]
+        return glyphs().ellipsis + s[-(max_len - 1) :]
     return s
 
 
@@ -230,7 +230,8 @@ def _budget_short(harness: CodingHarness) -> str:
         for dim, cap in snap.caps.items():
             used = snap.consumed.get(dim, 0.0)
             parts.append(f"{dim} {used:g}/{cap:g}")
-        return " · ".join(parts) if parts else "budget n/a"
+        sep = f" {glyphs().middot} "
+        return sep.join(parts) if parts else "budget n/a"
     except Exception:
         return harness.budget_summary()
 
@@ -254,8 +255,9 @@ def print_banner(console: Console, harness: CodingHarness) -> None:
     """Compact startup header: wordmark, version, cwd, model, hints."""
     from choreoai_cli import __version__
 
+    g = glyphs()
     title = Text()
-    title.append("●", style=f"bold {TERRACOTTA}")
+    title.append(g.bullet, style=f"bold {TERRACOTTA}")
     title.append(" ")
     title.append("ChoreoAI", style=f"bold {SAND}")
     title.append("  ", style="")
@@ -271,7 +273,7 @@ def print_banner(console: Console, harness: CodingHarness) -> None:
     meta.append(_model_label(harness), style=SAND)
 
     hint = Text(
-        "/help for commands · Ctrl+C to quit",
+        f"/help for commands {g.middot} Ctrl+C to quit",
         style=f"dim {TAUPE}",
     )
 
@@ -338,7 +340,8 @@ def print_help(console: Console) -> None:
     tips.append("\nShell approval", style=f"bold {SAND}")
     tips.append(" (when not --auto)\n", style=TAUPE)
     tips.append(
-        "  y / yes · n / no · always / a · deny <pattern>\n",
+        f"  y / yes {glyphs().middot} n / no {glyphs().middot} "
+        f"always / a {glyphs().middot} deny <pattern>\n",
         style=TAUPE,
     )
     tips.append(
@@ -469,15 +472,17 @@ def make_prompt_fn(
         pass
 
     def _default_toolbar() -> Any:
+        g = glyphs()
         model = model_name or "model"
         path = _short_cwd(cwd) if cwd is not None else "."
         return to_formatted_text(
             HTML(
                 f"<b><style fg=\"{TERRACOTTA}\">{model}</style></b>"
-                f" <style fg=\"{TAUPE}\">·</style> "
+                f" <style fg=\"{TAUPE}\">{g.middot}</style> "
                 f"<style fg=\"{SAND}\">{path}</style>"
-                f" <style fg=\"{TAUPE}\">·</style> "
-                f"<style fg=\"{TAUPE}\">↵ send · Esc↵ newline · /help · Ctrl+C quit</style>"
+                f" <style fg=\"{TAUPE}\">{g.middot}</style> "
+                f"<style fg=\"{TAUPE}\">↵ send {g.middot} Esc↵ newline "
+                f"{g.middot} /help {g.middot} Ctrl+C quit</style>"
             )
         )
 
@@ -495,16 +500,19 @@ def make_prompt_fn(
         key_bindings=kb,
         bottom_toolbar=toolbar,
         placeholder=HTML(
-            f'<style fg="{TAUPE}">Message the agent…  (/ for commands)</style>'
+            f'<style fg="{TAUPE}">Message the agent{glyphs().ellipsis}  '
+            f"(/ for commands)</style>"
         ),
     )
 
     def _prompt(message: str = "") -> str:
         # Ignore the legacy prompt string; we always use the branded glyph.
-        glyph = message if message and message not in ("choreoai> ", "› ", "❯ ") else ""
+        g = glyphs()
+        legacy = ("choreoai> ", "› ", "❯ ", f"{g.prompt} ")
+        glyph = message if message and message not in legacy else ""
         if glyph:
             return session.prompt([("class:prompt", glyph)])
-        return session.prompt([("class:prompt", "❯ ")])
+        return session.prompt([("class:prompt", f"{g.prompt} ")])
 
     return _prompt
 
@@ -556,13 +564,16 @@ class LiveEventSubscriber(Subscriber):
         if self._status is not None:
             self._status.stop()
 
-    def _resume_status(self, message: str = "orchestrating…") -> None:
+    def _resume_status(self, message: str | None = None) -> None:
         if self._status is not None:
+            if message is None:
+                message = f"orchestrating{glyphs().ellipsis}"
             self._status.update(f"[{TERRACOTTA}]{message}[/{TERRACOTTA}]")
             self._status.start()
 
     def _tool_icon(self, tool_name: str) -> str:
-        return _TOOL_ICONS.get(tool_name, "●")
+        g = glyphs()
+        return _tool_icons().get(tool_name, g.icon_default)
 
     def _render_tool_card(
         self,
@@ -575,8 +586,9 @@ class LiveEventSubscriber(Subscriber):
         err: str | None,
     ) -> None:
         """Print one aligned tool line into scrollback (no Live wipe)."""
-        ms_s = f"{ms:.0f}ms" if isinstance(ms, (int, float)) else "—"
-        mark = "✔" if ok else "✗"
+        g = glyphs()
+        ms_s = f"{ms:.0f}ms" if isinstance(ms, (int, float)) else g.emdash
+        mark = g.ok if ok else g.fail
         mark_style = "green" if ok else "red"
         icon = self._tool_icon(tool_name)
 
@@ -587,7 +599,11 @@ class LiveEventSubscriber(Subscriber):
         line.append(f"{tool_name:<12}", style="bold")
         if arg_summary:
             # Key argument, dim — the Claude-Code signature look
-            display_arg = arg_summary if len(arg_summary) <= 56 else arg_summary[:55] + "…"
+            display_arg = (
+                arg_summary
+                if len(arg_summary) <= 56
+                else arg_summary[:55] + g.ellipsis
+            )
             line.append(display_arg, style=f"dim {TAUPE}")
 
         # Right-side status: pad lightly then mark + time
@@ -604,7 +620,7 @@ class LiveEventSubscriber(Subscriber):
             prev = Text()
             prev.append("     ", style="")
             style = "red" if not ok else f"dim {TAUPE}"
-            text = preview if len(preview) <= 100 else preview[:99] + "…"
+            text = preview if len(preview) <= 100 else preview[:99] + g.ellipsis
             prev.append(text, style=style)
             self.console.print(prev)
 
@@ -648,7 +664,7 @@ class LiveEventSubscriber(Subscriber):
                 result_preview=result_preview,
                 err=str(err) if err else None,
             )
-            self._resume_status("orchestrating…")
+            self._resume_status()
 
         elif etype == "llm_called":
             self.llm_count += 1
@@ -663,19 +679,20 @@ class LiveEventSubscriber(Subscriber):
             if isinstance(out_tok, int):
                 self.total_output_tokens += out_tok
 
+            g = glyphs()
             if not ok:
                 err = getattr(event, "error", None) or "llm error"
                 self._pause_status()
                 line = Text()
-                line.append("  ● ", style="yellow")
+                line.append(f"  {g.bullet} ", style="yellow")
                 line.append("llm", style="yellow")
-                line.append(f"  fail — {err}", style=TAUPE)
+                line.append(f"  fail {g.emdash} {err}", style=TAUPE)
                 self.console.print(line)
-                self._resume_status("orchestrating…")
+                self._resume_status()
             else:
                 # Quiet success — usage lands in the turn footer.
                 bits = Text()
-                bits.append("  · ", style=f"dim {TAUPE}")
+                bits.append(f"  {g.middot} ", style=f"dim {TAUPE}")
                 bits.append(str(model), style=f"dim {TAUPE}")
                 if ms_s:
                     bits.append(f"  {ms_s}", style=f"dim {TAUPE}")
@@ -688,10 +705,10 @@ class LiveEventSubscriber(Subscriber):
                     bits.append(f"  {' '.join(tok_parts)}", style=f"dim {TAUPE}")
                 self._pause_status()
                 self.console.print(bits)
-                self._resume_status("orchestrating…")
+                self._resume_status()
 
         elif etype == "run_started":
-            self._resume_status("orchestrating…")
+            self._resume_status()
 
         elif etype == "run_finished":
             status = getattr(event, "status", "?")
@@ -771,8 +788,9 @@ def print_result(
         text = str(text)
 
     # Assistant marker + live Markdown body (no heavy panel wipe of scrollback).
+    g = glyphs()
     header = Text()
-    header.append("●", style=f"bold {TERRACOTTA}")
+    header.append(g.bullet, style=f"bold {TERRACOTTA}")
     header.append(" ", style="")
     header.append("Answer", style=f"bold {SAND}")
     console.print()
@@ -798,6 +816,7 @@ def print_result(
     footer = Text()
     footer.append("  ", style="")
     parts: list[str] = []
+    sep = f" {g.middot} "
     if in_tok or out_tok:
         parts.append(f"tokens {in_tok}↑ {out_tok}↓")
         parts.append(f"est {_format_cost(_estimate_cost_usd(in_tok, out_tok))}")
@@ -805,7 +824,7 @@ def print_result(
         parts.append(f"tools={tools_n} llm={llm_n}")
     if budget_parts:
         # Prefix so "budget" remains easy to grep in tests / logs.
-        parts.append("budget " + " · ".join(budget_parts))
+        parts.append("budget " + sep.join(budget_parts))
     if elapsed_s is not None:
         if elapsed_s < 10:
             parts.append(f"{elapsed_s:.1f}s")
@@ -813,7 +832,7 @@ def print_result(
             parts.append(f"{elapsed_s:.0f}s")
     parts.append(f"trace: {harness.trace_summary()}")
 
-    footer.append(" · ".join(parts), style=f"dim {TAUPE}")
+    footer.append(sep.join(parts), style=f"dim {TAUPE}")
     console.print(footer)
     console.print(Rule(style=f"dim {TAUPE}"))
 
@@ -850,8 +869,9 @@ def run_repl(
         Path for history, ``None`` for default ``~/.choreoai-cli/history``,
         or ``False`` for in-memory only.
     """
-    console = console or Console()
+    console = console or make_console()
     cwd = harness.cwd
+    g = glyphs()
 
     # Instrument tools once so tool cards can show key args + result previews.
     arg_tracker = getattr(harness, "tool_arg_tracker", None)
@@ -883,15 +903,17 @@ def run_repl(
             model = _model_label(harness)
             path = _short_cwd(cwd)
             budget = _budget_short(harness)
+            gg = glyphs()
             return to_formatted_text(
                 HTML(
                     f"<b><style fg=\"{TERRACOTTA}\">{model}</style></b>"
-                    f" <style fg=\"{TAUPE}\">·</style> "
+                    f" <style fg=\"{TAUPE}\">{gg.middot}</style> "
                     f"<style fg=\"{SAND}\">{path}</style>"
-                    f" <style fg=\"{TAUPE}\">·</style> "
+                    f" <style fg=\"{TAUPE}\">{gg.middot}</style> "
                     f"<style fg=\"{TAUPE}\">{budget}</style>"
-                    f" <style fg=\"{TAUPE}\">·</style> "
-                    f"<style fg=\"{TAUPE}\">↵ send · Esc↵ newline · /help · Ctrl+C quit</style>"
+                    f" <style fg=\"{TAUPE}\">{gg.middot}</style> "
+                    f"<style fg=\"{TAUPE}\">↵ send {gg.middot} Esc↵ newline "
+                    f"{gg.middot} /help {gg.middot} Ctrl+C quit</style>"
                 )
             )
 
@@ -916,7 +938,7 @@ def run_repl(
 
     while True:
         try:
-            line = input_fn("❯ ")
+            line = input_fn(f"{g.prompt} ")
         except (EOFError, KeyboardInterrupt):
             console.print()
             break
@@ -958,7 +980,7 @@ def run_repl(
         try:
             if spinner_ok:
                 with console.status(
-                    f"[{TERRACOTTA}]orchestrating…[/{TERRACOTTA}]",
+                    f"[{TERRACOTTA}]orchestrating{g.ellipsis}[/{TERRACOTTA}]",
                     spinner="dots",
                 ) as status:
                     if live is not None:
