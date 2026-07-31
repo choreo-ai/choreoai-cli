@@ -19,6 +19,7 @@ from typing import Any, Callable, Deque
 
 from rich.console import Console, Group
 from rich.markdown import Markdown
+from rich.padding import Padding
 from rich.panel import Panel
 from rich.rule import Rule
 from rich.status import Status
@@ -39,6 +40,9 @@ TERRACOTTA = "#C06B4E"
 TERRACOTTA_DEEP = "#A8583D"
 SAND = "#F1EBE0"
 TAUPE = "#B0A89C"
+
+# Consistent left gutter so content is not jammed against the terminal edge.
+GUTTER = 2
 
 # Rough Claude Sonnet-class list prices for a soft cost estimate (USD / 1M toks).
 _EST_INPUT_PER_M = 3.0
@@ -251,6 +255,11 @@ def _format_cost(usd: float) -> str:
     return f"${usd:.3f}"
 
 
+def _gutter_pad(renderable: Any, *, top: int = 0, bottom: int = 0) -> Padding:
+    """Apply the global left gutter (and optional vertical padding)."""
+    return Padding(renderable, (top, 0, bottom, GUTTER))
+
+
 def print_banner(console: Console, harness: CodingHarness) -> None:
     """Compact startup header: wordmark, version, cwd, model, hints."""
     from choreoai_cli import __version__
@@ -263,14 +272,12 @@ def print_banner(console: Console, harness: CodingHarness) -> None:
     title.append("  ", style="")
     title.append(f"v{__version__}", style=f"dim {TAUPE}")
 
-    meta = Text()
-    meta.append("cwd", style=f"dim {TAUPE}")
-    meta.append("  ", style="")
-    meta.append(str(harness.cwd), style=SAND)
-    meta.append("\n", style="")
-    meta.append("model", style=f"dim {TAUPE}")
-    meta.append("  ", style="")
-    meta.append(_model_label(harness), style=SAND)
+    # Two-column label/value grid so cwd / model values share a start column.
+    meta = Table.grid(padding=(0, 2), pad_edge=False, expand=False)
+    meta.add_column(style=f"dim {TAUPE}", justify="left", no_wrap=True)
+    meta.add_column(style=SAND, justify="left", overflow="fold")
+    meta.add_row("cwd", str(harness.cwd))
+    meta.add_row("model", _model_label(harness))
 
     hint = Text(
         f"/help for commands {g.middot} Ctrl+C to quit",
@@ -282,10 +289,12 @@ def print_banner(console: Console, harness: CodingHarness) -> None:
         Panel(
             body,
             border_style=TERRACOTTA,
-            padding=(0, 1),
+            padding=(1, 2),
             expand=True,
         )
     )
+    # Blank line after header before the next block / first prompt.
+    console.print()
 
 
 def print_api_key_note(console: Console) -> None:
@@ -293,7 +302,8 @@ def print_api_key_note(console: Console) -> None:
     if os.environ.get("ANTHROPIC_API_KEY"):
         return
     note = Text()
-    note.append("Note  ", style=f"bold {TERRACOTTA}")
+    note.append("Note", style=f"bold {TERRACOTTA}")
+    note.append("  ", style="")
     note.append(
         "ANTHROPIC_API_KEY is not set. Live model calls will fail; "
         "you can still explore /help and the shell. "
@@ -301,8 +311,9 @@ def print_api_key_note(console: Console) -> None:
         style=TAUPE,
     )
     console.print(
-        Panel(note, border_style=TAUPE, padding=(0, 1), expand=True)
+        Panel(note, border_style=TAUPE, padding=(1, 2), expand=True)
     )
+    console.print()
 
 
 def print_help(console: Console) -> None:
@@ -314,6 +325,7 @@ def print_help(console: Console) -> None:
         box=None,
         padding=(0, 2),
         expand=False,
+        pad_edge=False,
     )
     table.add_column("Command", style=f"bold {SAND}")
     table.add_column("Description", style=TAUPE)
@@ -321,20 +333,21 @@ def print_help(console: Console) -> None:
         table.add_row(cmd, desc)
 
     console.print()
-    console.print(Text("Commands", style=f"bold {SAND}"))
-    console.print(table)
+    console.print(_gutter_pad(Text("Commands", style=f"bold {SAND}")))
+    console.print(_gutter_pad(table))
     console.print()
+
     tips = Text()
     tips.append("Input", style=f"bold {SAND}")
-    tips.append("\n  ", style="")
-    tips.append("Enter", style=SAND)
-    tips.append("  send     ", style=TAUPE)
-    tips.append("Esc+Enter", style=SAND)
-    tips.append(" / ", style=TAUPE)
-    tips.append("Shift+Enter", style=SAND)
+    tips.append("\n", style="")
+    tips.append("  Enter", style=SAND)
+    tips.append("  send", style=TAUPE)
+    tips.append(f"  {glyphs().middot}  ", style=f"dim {TAUPE}")
+    tips.append("Esc+Enter / Shift+Enter", style=SAND)
     tips.append("  newline\n", style=TAUPE)
     tips.append("  Up/Down", style=SAND)
-    tips.append("  history     ", style=TAUPE)
+    tips.append("  history", style=TAUPE)
+    tips.append(f"  {glyphs().middot}  ", style=f"dim {TAUPE}")
     tips.append("Ctrl+C", style=SAND)
     tips.append("  quit\n", style=TAUPE)
     tips.append("\nShell approval", style=f"bold {SAND}")
@@ -348,7 +361,7 @@ def print_help(console: Console) -> None:
         "\nAnything else is sent to the coding agent as an instruction.",
         style=TAUPE,
     )
-    console.print(tips)
+    console.print(_gutter_pad(tips))
     console.print()
 
 
@@ -475,13 +488,15 @@ def make_prompt_fn(
         g = glyphs()
         model = model_name or "model"
         path = _short_cwd(cwd) if cwd is not None else "."
+        # Spaces around middot separators keep the toolbar from feeling cramped.
+        sep = f'  <style fg="{TAUPE}">{g.middot}</style>  '
         return to_formatted_text(
             HTML(
-                f"<b><style fg=\"{TERRACOTTA}\">{model}</style></b>"
-                f" <style fg=\"{TAUPE}\">{g.middot}</style> "
-                f"<style fg=\"{SAND}\">{path}</style>"
-                f" <style fg=\"{TAUPE}\">{g.middot}</style> "
-                f"<style fg=\"{TAUPE}\">↵ send {g.middot} Esc↵ newline "
+                f'  <b><style fg="{TERRACOTTA}">{model}</style></b>'
+                f"{sep}"
+                f'<style fg="{SAND}">{path}</style>'
+                f"{sep}"
+                f'<style fg="{TAUPE}">↵ send {g.middot} Esc↵ newline '
                 f"{g.middot} /help {g.middot} Ctrl+C quit</style>"
             )
         )
@@ -507,12 +522,13 @@ def make_prompt_fn(
 
     def _prompt(message: str = "") -> str:
         # Ignore the legacy prompt string; we always use the branded glyph.
+        # Leading spaces give the input line the same left gutter as other UI.
         g = glyphs()
-        legacy = ("choreoai> ", "› ", "❯ ", f"{g.prompt} ")
+        legacy = ("choreoai> ", "› ", "❯ ", f"{g.prompt} ", f"  {g.prompt} ")
         glyph = message if message and message not in legacy else ""
         if glyph:
             return session.prompt([("class:prompt", glyph)])
-        return session.prompt([("class:prompt", f"{g.prompt} ")])
+        return session.prompt([("class:prompt", f"  {g.prompt} ")])
 
     return _prompt
 
@@ -592,37 +608,48 @@ class LiveEventSubscriber(Subscriber):
         mark_style = "green" if ok else "red"
         icon = self._tool_icon(tool_name)
 
-        line = Text()
-        line.append("  ")
-        line.append(icon, style=TERRACOTTA if ok else "red")
-        line.append(" ")
-        line.append(f"{tool_name:<12}", style="bold")
+        display_arg = ""
         if arg_summary:
-            # Key argument, dim — the Claude-Code signature look
             display_arg = (
                 arg_summary
-                if len(arg_summary) <= 56
-                else arg_summary[:55] + g.ellipsis
+                if len(arg_summary) <= 48
+                else arg_summary[:47] + g.ellipsis
             )
-            line.append(display_arg, style=f"dim {TAUPE}")
 
-        # Right-side status: pad lightly then mark + time
-        line.append("  ")
-        line.append(mark, style=mark_style)
-        line.append(" ")
-        line.append(ms_s, style=f"dim {TAUPE}")
+        # Fixed-width grid so icon / name / args / status / timing line up
+        # across successive tool cards.
+        grid = Table.grid(padding=(0, 1), pad_edge=False, expand=False)
+        grid.add_column(width=2, no_wrap=True, justify="left")  # icon
+        grid.add_column(width=12, no_wrap=True, justify="left", style="bold")
+        grid.add_column(
+            width=48,
+            no_wrap=True,
+            overflow="ellipsis",
+            justify="left",
+            style=f"dim {TAUPE}",
+        )
+        grid.add_column(width=2, no_wrap=True, justify="center")  # ✔/✗
+        grid.add_column(
+            width=7, no_wrap=True, justify="right", style=f"dim {TAUPE}"
+        )  # timing
 
-        self.console.print(line)
+        mark_text = Text(mark, style=mark_style)
+        icon_text = Text(icon, style=TERRACOTTA if ok else "red")
+        grid.add_row(icon_text, tool_name, display_arg, mark_text, ms_s)
 
-        # Optional second line: short result / error preview
+        # First tool of a turn gets a blank line above the group.
+        if self.tool_count == 1:
+            self.console.print()
+        self.console.print(_gutter_pad(grid))
+
+        # Result preview indented under the card and dimmed.
         preview = err if (not ok and err) else result_preview
         if preview:
-            prev = Text()
-            prev.append("     ", style="")
             style = "red" if not ok else f"dim {TAUPE}"
             text = preview if len(preview) <= 100 else preview[:99] + g.ellipsis
-            prev.append(text, style=style)
-            self.console.print(prev)
+            prev = Text(text, style=style)
+            # Icon col (2) + pad + name starts under the arg column.
+            self.console.print(Padding(prev, (0, 0, 0, GUTTER + 3 + 13)))
 
     async def on_event(self, event: Event) -> None:
         etype = getattr(event, "type", None)
@@ -684,15 +711,15 @@ class LiveEventSubscriber(Subscriber):
                 err = getattr(event, "error", None) or "llm error"
                 self._pause_status()
                 line = Text()
-                line.append(f"  {g.bullet} ", style="yellow")
+                line.append(f"{g.bullet} ", style="yellow")
                 line.append("llm", style="yellow")
                 line.append(f"  fail {g.emdash} {err}", style=TAUPE)
-                self.console.print(line)
+                self.console.print(_gutter_pad(line))
                 self._resume_status()
             else:
                 # Quiet success — usage lands in the turn footer.
                 bits = Text()
-                bits.append(f"  {g.middot} ", style=f"dim {TAUPE}")
+                bits.append(f"{g.middot} ", style=f"dim {TAUPE}")
                 bits.append(str(model), style=f"dim {TAUPE}")
                 if ms_s:
                     bits.append(f"  {ms_s}", style=f"dim {TAUPE}")
@@ -704,7 +731,7 @@ class LiveEventSubscriber(Subscriber):
                 if tok_parts:
                     bits.append(f"  {' '.join(tok_parts)}", style=f"dim {TAUPE}")
                 self._pause_status()
-                self.console.print(bits)
+                self.console.print(_gutter_pad(bits))
                 self._resume_status()
 
         elif etype == "run_started":
@@ -715,7 +742,9 @@ class LiveEventSubscriber(Subscriber):
             self._pause_status()
             if status and status not in ("ok",):
                 self.console.print(
-                    Text(f"  run finished ({status})", style=f"dim {TAUPE}")
+                    _gutter_pad(
+                        Text(f"run finished ({status})", style=f"dim {TAUPE}")
+                    )
                 )
 
         elif etype == "step_finished":
@@ -793,9 +822,11 @@ def print_result(
     header.append(g.bullet, style=f"bold {TERRACOTTA}")
     header.append(" ", style="")
     header.append("Answer", style=f"bold {SAND}")
+    # Blank line before the Answer marker (breathing room after tool cards).
     console.print()
-    console.print(header)
-    console.print(_render_answer_body(text))
+    console.print(_gutter_pad(header))
+    # Small left margin so the body is not flush to the terminal edge.
+    console.print(Padding(_render_answer_body(text), (0, 0, 0, GUTTER + 2)))
     console.print()
 
     snap = result.budget_snapshot
@@ -813,8 +844,9 @@ def print_result(
     tools_n = live.tool_count if live is not None else 0
     llm_n = live.llm_count if live is not None else 0
 
-    footer = Text()
-    footer.append("  ", style="")
+    # Thin full-width rule above the footer (blank line already printed above).
+    console.print(Rule(style=f"dim {TAUPE}"))
+
     parts: list[str] = []
     sep = f" {g.middot} "
     if in_tok or out_tok:
@@ -830,11 +862,17 @@ def print_result(
             parts.append(f"{elapsed_s:.1f}s")
         else:
             parts.append(f"{elapsed_s:.0f}s")
-    parts.append(f"trace: {harness.trace_summary()}")
 
-    footer.append(sep.join(parts), style=f"dim {TAUPE}")
-    console.print(footer)
-    console.print(Rule(style=f"dim {TAUPE}"))
+    # Primary stats on one line; trace on its own so wrap never starts with "·".
+    footer = Text(sep.join(parts), style=f"dim {TAUPE}")
+    console.print(_gutter_pad(footer))
+    console.print(
+        _gutter_pad(
+            Text(f"trace: {harness.trace_summary()}", style=f"dim {TAUPE}")
+        )
+    )
+    # Blank line after the turn footer before the next prompt.
+    console.print()
 
 
 # Back-compat alias used by __main__ and older tests.
@@ -904,15 +942,17 @@ def run_repl(
             path = _short_cwd(cwd)
             budget = _budget_short(harness)
             gg = glyphs()
+            # Spaces around middot keep toolbar items from packing edge-to-edge.
+            sep = f'  <style fg="{TAUPE}">{gg.middot}</style>  '
             return to_formatted_text(
                 HTML(
-                    f"<b><style fg=\"{TERRACOTTA}\">{model}</style></b>"
-                    f" <style fg=\"{TAUPE}\">{gg.middot}</style> "
-                    f"<style fg=\"{SAND}\">{path}</style>"
-                    f" <style fg=\"{TAUPE}\">{gg.middot}</style> "
-                    f"<style fg=\"{TAUPE}\">{budget}</style>"
-                    f" <style fg=\"{TAUPE}\">{gg.middot}</style> "
-                    f"<style fg=\"{TAUPE}\">↵ send {gg.middot} Esc↵ newline "
+                    f'  <b><style fg="{TERRACOTTA}">{model}</style></b>'
+                    f"{sep}"
+                    f'<style fg="{SAND}">{path}</style>'
+                    f"{sep}"
+                    f'<style fg="{TAUPE}">{budget}</style>'
+                    f"{sep}"
+                    f'<style fg="{TAUPE}">↵ send {gg.middot} Esc↵ newline '
                     f"{gg.middot} /help {gg.middot} Ctrl+C quit</style>"
                 )
             )
@@ -938,7 +978,8 @@ def run_repl(
 
     while True:
         try:
-            line = input_fn(f"{g.prompt} ")
+            # Gutter-aligned prompt glyph (matches content margin).
+            line = input_fn(f"  {g.prompt} ")
         except (EOFError, KeyboardInterrupt):
             console.print()
             break
@@ -960,17 +1001,26 @@ def run_repl(
                 live.reset_turn_stats()
             if arg_tracker is not None:
                 arg_tracker.clear()
+            console.print()
             console.print(
-                Text(
-                    "Session reset: budget ledger, shell approvals, and trace cleared.",
-                    style=f"dim {TAUPE}",
+                _gutter_pad(
+                    Text(
+                        "Session reset: budget ledger, shell approvals, and "
+                        "trace cleared.",
+                        style=f"dim {TAUPE}",
+                    )
                 )
             )
+            console.print()
             continue
         if text.startswith("/"):
+            console.print()
             console.print(
-                Text(f"Unknown command: {text}. Try /help.", style="yellow")
+                _gutter_pad(
+                    Text(f"Unknown command: {text}. Try /help.", style="yellow")
+                )
             )
+            console.print()
             continue
 
         if live is not None:
@@ -994,16 +1044,22 @@ def run_repl(
                 result = harness.run(text)
         except KeyboardInterrupt:
             console.print()
-            console.print(Text("Turn cancelled.", style=f"dim {TAUPE}"))
+            console.print(
+                _gutter_pad(Text("Turn cancelled.", style=f"dim {TAUPE}"))
+            )
+            console.print()
             continue
         except Exception as exc:
-            console.print(Text(f"Error: {exc}", style="red"))
+            console.print()
+            console.print(_gutter_pad(Text(f"Error: {exc}", style="red")))
+            console.print()
             continue
 
         elapsed = time.perf_counter() - t0
         print_result(console, harness, result, live=live, elapsed_s=elapsed)
 
-    console.print(Text("bye", style=f"dim {TAUPE}"))
+    console.print()
+    console.print(_gutter_pad(Text("bye", style=f"dim {TAUPE}")))
     return 0
 
 
