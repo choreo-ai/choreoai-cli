@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/choreo-ai/choreoai/main/assets/banner.png" alt="ChoreoAI — Multi-agent systems, in production." width="840">
+  <img src="https://raw.githubusercontent.com/choreo-ai/choreoai/main/assets/banner-choreoai.png" alt="ChoreoAI — Multi-agent systems, in production." width="840">
 </p>
 
 <p align="center">
