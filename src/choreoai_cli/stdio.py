@@ -1,143 +1,23 @@
-"""UTF-8 stdio setup and UI glyph selection for Windows-safe output.
+"""Back-compat re-export of UTF-8 stdio / glyph helpers (now in ui.theme)."""
 
-On Windows the process stdout encoding is often cp1252, which cannot encode
-brand glyphs (●, ❯, ✔, …). Rich may also take its legacy-Windows path and
-route through the same codec. Configure streams for UTF-8 at startup and fall
-back to ASCII symbols only when the encoding still cannot represent them.
-"""
-
-from __future__ import annotations
-
-import io
-import sys
-from dataclasses import dataclass
-from typing import Any, TextIO
-
-from rich.console import Console
-
-# Glyphs that appear in the banner / tool cards / prompt — used as a probe.
-_SENTINEL = "●❯✔✗…—·◎✎▦›"
-
-
-def configure_stdio_utf8() -> None:
-    """Force UTF-8 (with replace) on stdout and stderr when possible."""
-    for name in ("stdout", "stderr"):
-        stream: TextIO | None = getattr(sys, name, None)
-        if stream is None:
-            continue
-        reconfigure = getattr(stream, "reconfigure", None)
-        if callable(reconfigure):
-            try:
-                reconfigure(encoding="utf-8", errors="replace")
-                continue
-            except (AttributeError, OSError, ValueError, io.UnsupportedOperation):
-                pass
-        buffer = getattr(stream, "buffer", None)
-        if buffer is None:
-            continue
-        try:
-            wrapped = io.TextIOWrapper(
-                buffer,
-                encoding="utf-8",
-                errors="replace",
-                line_buffering=bool(getattr(stream, "line_buffering", True)),
-                write_through=bool(getattr(stream, "write_through", False)),
-            )
-            setattr(sys, name, wrapped)
-        except (AttributeError, OSError, ValueError, io.UnsupportedOperation):
-            pass
-
-
-def stream_supports_unicode(stream: TextIO | None = None) -> bool:
-    """Return True if *stream* can encode the brand glyph set."""
-    stream = stream if stream is not None else sys.stdout
-    encoding = getattr(stream, "encoding", None) or "utf-8"
-    try:
-        _SENTINEL.encode(encoding)
-        return True
-    except (LookupError, UnicodeEncodeError):
-        return False
-
-
-@dataclass(frozen=True)
-class Glyphs:
-    """Brand / UI symbols — Unicode when safe, ASCII otherwise."""
-
-    bullet: str = "●"
-    prompt: str = "❯"
-    ok: str = "✔"
-    fail: str = "✗"
-    ellipsis: str = "…"
-    emdash: str = "—"
-    middot: str = "·"
-    icon_read: str = "◎"
-    icon_write: str = "✎"
-    icon_list: str = "▦"
-    icon_shell: str = "›"
-    icon_default: str = "●"
-
-    def tool_icons(self) -> dict[str, str]:
-        return {
-            "read_file": self.icon_read,
-            "write_file": self.icon_write,
-            "list_dir": self.icon_list,
-            "run_shell": self.icon_shell,
-        }
-
-
-ASCII_GLYPHS = Glyphs(
-    bullet="*",
-    prompt=">",
-    ok="[ok]",
-    fail="[x]",
-    ellipsis="...",
-    emdash="-",
-    middot="|",
-    icon_read="o",
-    icon_write="w",
-    icon_list="#",
-    icon_shell=">",
-    icon_default="*",
+from choreoai_cli.ui.theme import (
+    ASCII_GLYPHS,
+    Glyphs,
+    configure_stdio_utf8,
+    glyphs,
+    init_output,
+    make_console,
+    stream_supports_unicode,
+    unicode_output_ok,
 )
 
-_unicode_ok: bool | None = None
-_glyphs: Glyphs | None = None
-
-
-def init_output() -> bool:
-    """Configure UTF-8 stdio and select glyph mode. Returns True if Unicode OK."""
-    global _unicode_ok, _glyphs
-    configure_stdio_utf8()
-    _unicode_ok = stream_supports_unicode(sys.stdout)
-    _glyphs = Glyphs() if _unicode_ok else ASCII_GLYPHS
-    return _unicode_ok
-
-
-def unicode_output_ok() -> bool:
-    """Whether fancy glyphs should be used (after :func:`init_output`)."""
-    if _unicode_ok is None:
-        init_output()
-    return bool(_unicode_ok)
-
-
-def glyphs() -> Glyphs:
-    """Active glyph set (Unicode or ASCII)."""
-    if _glyphs is None:
-        init_output()
-    assert _glyphs is not None
-    return _glyphs
-
-
-def make_console(**kwargs: Any) -> Console:
-    """Build a Rich Console that emits UTF-8 and never uses legacy Win32 print.
-
-    ``legacy_windows=False`` is critical: with the default auto-detect, Rich
-    routes through ``LegacyWindowsTerm`` which still encodes with the
-    process code page (often cp1252) even after Python stream reconfigure.
-    """
-    if _unicode_ok is None:
-        init_output()
-    kwargs.setdefault("legacy_windows", False)
-    # When the stream cannot encode box-drawing, Rich falls back safely.
-    kwargs.setdefault("safe_box", True)
-    return Console(**kwargs)
+__all__ = [
+    "ASCII_GLYPHS",
+    "Glyphs",
+    "configure_stdio_utf8",
+    "glyphs",
+    "init_output",
+    "make_console",
+    "stream_supports_unicode",
+    "unicode_output_ok",
+]

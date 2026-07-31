@@ -65,12 +65,12 @@ def test_ascii_glyphs_are_encodable_on_cp1252() -> None:
 
 
 def test_banner_renders_with_ascii_glyphs(monkeypatch) -> None:
-    import choreoai_cli.stdio as stdio
-    from choreoai_cli.repl import print_banner
+    import choreoai_cli.ui.theme as theme
+    from choreoai_cli.ui.header import print_banner
     from pathlib import Path
 
-    monkeypatch.setattr(stdio, "_unicode_ok", False)
-    monkeypatch.setattr(stdio, "_glyphs", ASCII_GLYPHS)
+    monkeypatch.setattr(theme, "_unicode_ok", False)
+    monkeypatch.setattr(theme, "_glyphs", ASCII_GLYPHS)
 
     buf = io.StringIO()
     console = Console(

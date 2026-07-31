@@ -9,7 +9,7 @@ from pathlib import Path
 
 def main(argv: list[str] | None = None) -> int:
     # Before any Rich Console / banner: force UTF-8 and pick glyph mode.
-    from choreoai_cli.stdio import init_output, make_console
+    from choreoai_cli.ui.theme import init_output
 
     init_output()
 
@@ -49,35 +49,16 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    from choreoai_cli.repl import build_live_harness, print_result, run_repl
+    from choreoai_cli.app import config_from_args, run_app
 
-    console = make_console()
-    cwd = args.cwd.resolve() if args.cwd else Path.cwd()
-
-    try:
-        harness = build_live_harness(
-            cwd=cwd,
-            auto=args.auto,
-            max_steps=args.max_steps,
-            step_budget=args.step_budget,
-        )
-    except Exception as exc:
-        console.print(f"[red]Failed to start harness: {exc}[/red]")
-        console.print(
-            "[dim]Tip: set ANTHROPIC_API_KEY and ensure choreoai is installed.[/dim]"
-        )
-        return 1
-
-    if args.command is not None:
-        try:
-            result = harness.run(args.command)
-        except Exception as exc:
-            console.print(f"[red]Error: {exc}[/red]")
-            return 1
-        print_result(console, harness, result)
-        return 0
-
-    return run_repl(harness, console=console)
+    config = config_from_args(
+        cwd=args.cwd,
+        auto=args.auto,
+        max_steps=args.max_steps,
+        step_budget=args.step_budget,
+        command=args.command,
+    )
+    return run_app(config)
 
 
 if __name__ == "__main__":
