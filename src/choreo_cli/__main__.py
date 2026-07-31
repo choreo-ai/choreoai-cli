@@ -46,7 +46,7 @@ def main(argv: list[str] | None = None) -> int:
 
     from rich.console import Console
 
-    from choreo_cli.repl import build_live_harness, run_repl, _print_result
+    from choreo_cli.repl import build_live_harness, print_result, run_repl
 
     console = Console()
     cwd = args.cwd.resolve() if args.cwd else Path.cwd()
@@ -71,7 +71,7 @@ def main(argv: list[str] | None = None) -> int:
         except Exception as exc:
             console.print(f"[red]Error: {exc}[/red]")
             return 1
-        _print_result(console, harness, result)
+        print_result(console, harness, result)
         return 0
 
     return run_repl(harness, console=console)

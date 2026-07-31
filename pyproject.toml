@@ -25,6 +25,7 @@ classifiers = [
 dependencies = [
   "choreoai>=0.0.1",
   "rich",
+  "prompt_toolkit>=3.0",
 ]
 
 [project.optional-dependencies]

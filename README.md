@@ -11,7 +11,9 @@ budget-bounded and observable.
 ## Features (v0)
 
 - Interactive REPL (`choreoai-cli`) with `/help`, `/reset`, `/exit`
-- Coding tools: `read_file`, `write_file`, `list_dir`, `run_shell`
+- Polished terminal UI: **rich** panels/markdown/syntax + **prompt_toolkit** history/multiline input
+- Live-streamed tool calls via choreoai event subscribers (spinner while the model thinks)
+- Coding tools: `read_file`, `write_file`, `list_dir`, `run_shell` (path jail under `--cwd`)
 - Shell commands require confirmation unless `--auto` is set
 - Built on choreoai: `LLMAgent` tool loop, `Budget` + `Trace` middleware, typed event stream
 - Default model: `claude-sonnet-5` (via choreoai / Anthropic)
@@ -72,10 +74,13 @@ choreoai-cli --cwd /path/to/project
 | Command  | Action                |
 |----------|-------------------------|
 | `/help`  | Show help               |
-| `/reset` | Clear the event trace   |
+| `/reset` | Clear session budget, shell approvals, and trace |
 | `/exit`  | Quit                    |
 
 Anything else is sent to the coding agent as an instruction.
+
+Input uses `prompt_toolkit` when the terminal is interactive (history, Esc+Enter
+for multiline submit). Pipes and tests fall back to plain `input`.
 
 ### Environment
 
