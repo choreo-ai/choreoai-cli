@@ -20,7 +20,7 @@ from rich.status import Status
 from rich.syntax import Syntax
 from rich.text import Text
 
-from choreo.core.events import Event, Subscriber
+from choreoai.core.events import Event, Subscriber
 
 from choreo_cli.harness import CodingHarness, RunResult
 
@@ -478,7 +478,7 @@ def build_live_harness(
     step_budget: float = 20.0,
 ) -> CodingHarness:
     """Build a harness with the default Claude model (needs ANTHROPIC_API_KEY)."""
-    from choreo.models import get_default_model
+    from choreoai.models import get_default_model
 
     model = get_default_model()
     return CodingHarness.create(

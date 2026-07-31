@@ -9,8 +9,8 @@ from typing import Any, Callable
 from langchain_core.language_models import BaseChatModel
 from langchain_core.tools import BaseTool
 
-from choreo.agents import LLMAgent
-from choreo.core import (
+from choreoai.agents import LLMAgent
+from choreoai.core import (
     BudgetMiddleware,
     InMemoryRunContext,
     ListSubscriber,
@@ -19,7 +19,7 @@ from choreo.core import (
     Subscriber,
     TraceMiddleware,
 )
-from choreo.reliability import BudgetDimensions, InMemoryBudget
+from choreoai.reliability import BudgetDimensions, InMemoryBudget
 
 from choreo_cli.tools import ShellApprovalPolicy, default_tools
 

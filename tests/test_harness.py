@@ -8,9 +8,9 @@ import pytest
 from langchain_core.messages import AIMessage
 from langchain_core.runnables import Runnable
 
-from choreo.core import BudgetMiddleware, OnionMiddlewareStack
-from choreo.core.events import Event, Subscriber
-from choreo.reliability import BudgetDimensions, BudgetExhausted, InMemoryBudget
+from choreoai.core import BudgetMiddleware, OnionMiddlewareStack
+from choreoai.core.events import Event, Subscriber
+from choreoai.reliability import BudgetDimensions, BudgetExhausted, InMemoryBudget
 
 from choreo_cli.harness import CodingHarness
 from choreo_cli.repl import LiveEventSubscriber

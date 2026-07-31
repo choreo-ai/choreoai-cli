@@ -10,7 +10,7 @@ import pytest
 from langchain_core.messages import AIMessage
 from rich.console import Console
 
-from choreo.core.events import LLMCalled, RunFinished, RunStarted, ToolCalled
+from choreoai.core.events import LLMCalled, RunFinished, RunStarted, ToolCalled
 
 from choreo_cli.harness import CodingHarness
 from choreo_cli.repl import (
