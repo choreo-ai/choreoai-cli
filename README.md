@@ -1,6 +1,6 @@
 # choreoai-cli
 
-**A Claude-Code-style coding agent harness built on [choreoai](https://github.com/choreo-ai/choreo).**
+**A Claude-Code-style coding agent harness built on [choreoai](https://github.com/choreo-ai/choreoai).**
 
 `choreoai-cli` is an interactive terminal REPL that runs a coding agent in your current
 directory using choreoai's `LLMAgent`, tools, budget, and trace — so the harness itself is

@@ -27,7 +27,7 @@ jobs:
           python -m pip install --upgrade pip
           # choreoai is not on PyPI yet; install from git first so
           # choreoai>=0.0.1 in pyproject is already satisfied offline-from-index.
-          pip install "choreoai @ git+https://github.com/choreo-ai/choreo"
+          pip install "choreoai @ git+https://github.com/choreo-ai/choreoai"
           pip install -e ".[dev]"
 
 
